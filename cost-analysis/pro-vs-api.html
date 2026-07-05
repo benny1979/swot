@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Claude Pro vs API Cost Analysis</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* ─── Design tokens ─────────────────────────────────────────── */
+  :root {
+    --surface-1:       #fcfcfb;
+    --surface-page:    #f9f9f7;
+    --text-primary:    #0b0b0b;
+    --text-secondary:  #52514e;
+    --text-muted:      #898781;
+    --gridline:        #e1e0d9;
+    --baseline:        #c3c2b7;
+    --border:          rgba(11,11,11,0.10);
+
+    /* categorical */
+    --c1:  #2a78d6;   /* blue   — API Sonnet */
+    --c2:  #1baf7a;   /* aqua   — API Haiku  */
+    --c3:  #eda100;   /* yellow — API Opus   */
+    --c6:  #e34948;   /* red    — Pro flat   */
+
+    /* sequential blue (bar segments) */
+    --seq-100: #cde2fb;
+    --seq-300: #6da7ec;
+    --seq-450: #2a78d6;
+    --seq-600: #184f95;
+
+    /* status */
+    --good:    #0ca30c;
+    --serious: #ec835a;
+
+    --radius: 8px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface-1:       #1a1a19;
+      --surface-page:    #0d0d0d;
+      --text-primary:    #ffffff;
+      --text-secondary:  #c3c2b7;
+      --text-muted:      #898781;
+      --gridline:        #2c2c2a;
+      --baseline:        #383835;
+      --border:          rgba(255,255,255,0.10);
+      --c1:  #3987e5;
+      --c2:  #199e70;
+      --c3:  #c98500;
+      --c6:  #e66767;
+      --good: #0ca30c;
+    }
+  }
+  :root[data-theme="light"] {
+    --surface-1:       #fcfcfb; --surface-page:    #f9f9f7;
+    --text-primary:    #0b0b0b; --text-secondary:  #52514e;
+    --text-muted:      #898781; --gridline:        #e1e0d9;
+    --baseline:        #c3c2b7; --border:          rgba(11,11,11,0.10);
+    --c1:  #2a78d6; --c2:  #1baf7a; --c3:  #eda100; --c6:  #e34948;
+    --good: #006300;
+  }
+  :root[data-theme="dark"] {
+    --surface-1:       #1a1a19; --surface-page:    #0d0d0d;
+    --text-primary:    #ffffff; --text-secondary:  #c3c2b7;
+    --text-muted:      #898781; --gridline:        #2c2c2a;
+    --baseline:        #383835; --border:          rgba(255,255,255,0.10);
+    --c1:  #3987e5; --c2:  #199e70; --c3:  #c98500; --c6:  #e66767;
+    --good: #0ca30c;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    background: var(--surface-page);
+    color: var(--text-primary);
+    min-height: 100vh;
+  }
+
+  /* ─── Layout ────────────────────────────────────────────────── */
+  .page { max-width: 900px; margin: 0 auto; padding: 32px 20px 64px; }
+  .page-header { margin-bottom: 32px; }
+  .page-header h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+  .page-header p  { color: var(--text-secondary); font-size: 13px; }
+
+  /* theme toggle */
+  .theme-btn {
+    position: fixed; top: 16px; right: 16px;
+    background: var(--surface-1); border: 1px solid var(--border);
+    color: var(--text-secondary); border-radius: 6px;
+    padding: 4px 10px; font-size: 12px; cursor: pointer;
+  }
+  .theme-btn:hover { color: var(--text-primary); }
+
+  /* ─── KPI tiles ─────────────────────────────────────────────── */
+  .kpi-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 28px; }
+  @media (max-width: 520px) { .kpi-row { grid-template-columns: 1fr 1fr; } }
+  .kpi {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px;
+  }
+  .kpi-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+  .kpi-value { font-size: 28px; font-weight: 700; margin: 4px 0 2px; line-height: 1; }
+  .kpi-sub   { font-size: 12px; color: var(--text-secondary); }
+  .kpi-value.good { color: var(--good); }
+
+  /* ─── Chart panels ───────────────────────────────────────────── */
+  .panel {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px; margin-bottom: 20px;
+  }
+  .panel-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .panel-sub   { font-size: 12px; color: var(--text-secondary); margin-bottom: 20px; }
+
+  /* ─── Break-even line chart ──────────────────────────────────── */
+  #breakeven-chart {
+    position: relative; width: 100%; height: 280px;
+    overflow: hidden;
+  }
+  #breakeven-chart svg { width: 100%; height: 100%; overflow: visible; }
+
+  /* ─── Legend ────────────────────────────────────────────────── */
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 14px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+  .legend-swatch { width: 24px; height: 3px; border-radius: 2px; flex-shrink: 0; }
+  .legend-swatch.dashed { background: repeating-linear-gradient(to right, var(--c6) 0 5px, transparent 5px 8px); }
+
+  /* ─── Stacked cost bar ───────────────────────────────────────── */
+  .cost-breakdown { margin-top: 12px; }
+  .cost-row { margin-bottom: 20px; }
+  .cost-row-label {
+    display: flex; justify-content: space-between;
+    font-size: 12px; color: var(--text-secondary); margin-bottom: 5px;
+  }
+  .cost-row-label strong { color: var(--text-primary); }
+  .bar-track {
+    height: 28px; border-radius: 4px;
+    background: var(--gridline); overflow: hidden;
+    display: flex;
+  }
+  .bar-seg { height: 100%; transition: opacity .15s; position: relative; }
+  .bar-seg:hover { opacity: .85; }
+  .bar-seg + .bar-seg { border-left: 2px solid var(--surface-1); }
+  .bar-tip {
+    display: none; position: absolute; bottom: calc(100% + 6px); left: 50%;
+    transform: translateX(-50%); background: var(--text-primary); color: var(--surface-1);
+    font-size: 11px; padding: 3px 7px; border-radius: 4px; white-space: nowrap; z-index: 10;
+    pointer-events: none;
+  }
+  .bar-seg:hover .bar-tip { display: block; }
+
+  /* ─── Comparison table ───────────────────────────────────────── */
+  .table-wrap { overflow-x: auto; margin-top: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-weight: 600; padding: 8px 12px; font-size: 11px;
+       text-transform: uppercase; letter-spacing: .04em;
+       color: var(--text-muted); border-bottom: 1px solid var(--gridline); }
+  td { padding: 9px 12px; border-bottom: 1px solid var(--gridline); }
+  tr:last-child td { border-bottom: none; }
+  .num { font-variant-numeric: tabular-nums; text-align: right; }
+  .winner { color: var(--good); font-weight: 600; }
+  .loser  { color: var(--text-muted); }
+
+  /* ─── Tooltip for line chart ─────────────────────────────────── */
+  #lc-tooltip {
+    position: absolute; pointer-events: none;
+    background: var(--text-primary); color: var(--surface-1);
+    font-size: 12px; padding: 6px 10px; border-radius: 5px;
+    display: none; white-space: nowrap; z-index: 20;
+  }
+  #lc-tooltip .tt-row { display: flex; align-items: center; gap: 6px; }
+  #lc-tooltip .tt-swatch { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+  /* ─── Note ───────────────────────────────────────────────────── */
+  .note { font-size: 12px; color: var(--text-muted); margin-top: 8px; line-height: 1.6; }
+  .note strong { color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<button class="theme-btn" onclick="toggleTheme()">Toggle theme</button>
+
+<div class="page">
+  <header class="page-header">
+    <h1>Claude Pro vs API — Cost Analysis</h1>
+    <p>Based on actual token usage from this Claude Code session &middot; July 5, 2026 &middot; Model: claude-sonnet-4-6</p>
+  </header>
+
+  <!-- KPI row -->
+  <div class="kpi-row">
+    <div class="kpi">
+      <div class="kpi-label">This session (API cost)</div>
+      <div class="kpi-value">$0.37</div>
+      <div class="kpi-sub">8 calls &middot; 6,150 output tokens</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Break-even (vs Pro $20)</div>
+      <div class="kpi-value">54</div>
+      <div class="kpi-sub">sessions / month</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Cache savings this session</div>
+      <div class="kpi-value good">64%</div>
+      <div class="kpi-sub">$0.37 vs $1.03 uncached</div>
+    </div>
+  </div>
+
+  <!-- Break-even line chart -->
+  <div class="panel">
+    <div class="panel-title">Monthly cost vs sessions per month</div>
+    <div class="panel-sub">API cost grows linearly; Pro is a flat $20/month. Claude Max Pro is $100/month.</div>
+    <div style="position:relative;">
+      <div id="breakeven-chart">
+        <svg id="lc-svg" viewBox="0 0 800 260" preserveAspectRatio="xMinYMin meet">
+          <!-- rendered by JS -->
+        </svg>
+      </div>
+      <div id="lc-tooltip"></div>
+    </div>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--c1)"></div>API — Sonnet 4.6</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--c2)"></div>API — Haiku 4.5</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--c3)"></div>API — Opus 4.8</div>
+      <div class="legend-item"><div class="legend-swatch dashed" style="height:2px"></div>Claude Pro ($20/mo)</div>
+    </div>
+  </div>
+
+  <!-- Token cost breakdown -->
+  <div class="panel">
+    <div class="panel-title">Session token cost breakdown — Sonnet 4.6</div>
+    <div class="panel-sub">How the $0.37 is distributed across token types. Hover segments for details.</div>
+    <div class="cost-breakdown" id="cost-bars"></div>
+    <p class="note">
+      <strong>Cache write</strong> costs 1.25× input rate; <strong>cache read</strong> costs 0.10× — a 90% discount.
+      Prompt caching is automatic in Claude Code and dramatically reduces costs on long, repeated contexts.
+    </p>
+  </div>
+
+  <!-- Model comparison table -->
+  <div class="panel">
+    <div class="panel-title">Model comparison — same session tokens</div>
+    <div class="panel-sub">What this session would cost if Claude Code used a different default model.</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Input $/MTok</th>
+            <th>Cache-write $/MTok</th>
+            <th>Cache-read $/MTok</th>
+            <th>Output $/MTok</th>
+            <th class="num">Session cost</th>
+            <th class="num">Break-even sessions</th>
+          </tr>
+        </thead>
+        <tbody id="model-table"></tbody>
+      </table>
+    </div>
+    <p class="note">
+      Break-even = $20 (Claude Pro) ÷ session cost. Above this threshold per month, the API is cheaper.
+    </p>
+  </div>
+
+  <!-- Table view (accessibility) -->
+  <div class="panel">
+    <div class="panel-title">Monthly cost lookup — Sonnet 4.6</div>
+    <div class="panel-sub">Pre-computed costs for common session frequencies.</div>
+    <div class="table-wrap">
+      <table id="lookup-table">
+        <thead>
+          <tr>
+            <th>Usage pattern</th>
+            <th class="num">Sessions / month</th>
+            <th class="num">API cost / month</th>
+            <th class="num">Claude Pro</th>
+            <th>Verdict</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /page -->
+
+<script>
+/* ── Data ──────────────────────────────────────────────────────── */
+const SESSION = {
+  input:       12,
+  output:    6150,
+  cacheWrite: 53122,
+  cacheRead: 257853,
+};
+
+const MODELS = [
+  { name: 'Haiku 4.5',  id: 'claude-haiku-4-5',  inp: 1.00, out: 5.00,  cw: 1.25, cr: 0.10 },
+  { name: 'Sonnet 4.6', id: 'claude-sonnet-4-6', inp: 3.00, out: 15.00, cw: 3.75, cr: 0.30 },
+  { name: 'Opus 4.8',   id: 'claude-opus-4-8',   inp: 5.00, out: 25.00, cw: 6.25, cr: 0.50 },
+];
+const PRO_COST  = 20;
+const PRO_MAX   = 100;
+
+function sessionCost(m) {
+  const M = 1_000_000;
+  return (
+    SESSION.input      * m.inp / M +
+    SESSION.cacheWrite * m.cw  / M +
+    SESSION.cacheRead  * m.cr  / M +
+    SESSION.output     * m.out / M
+  );
+}
+
+const costs = MODELS.map(m => ({ ...m, cost: sessionCost(m) }));
+
+/* ── CSS var helper ─────────────────────────────────────────────── */
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+/* ── Break-even line chart (SVG) ─────────────────────────────────── */
+function renderLineChart() {
+  const svg = document.getElementById('lc-svg');
+  svg.innerHTML = '';
+
+  const W = 800, H = 260;
+  const PAD = { top: 20, right: 20, bottom: 36, left: 52 };
+  const cw = W - PAD.left - PAD.right;
+  const ch = H - PAD.top  - PAD.bottom;
+
+  const maxSessions = 120;
+  const maxCost = Math.max(costs[2].cost * maxSessions, PRO_MAX) * 1.05;
+
+  const xScale = s => PAD.left + (s / maxSessions) * cw;
+  const yScale = c => PAD.top  + ch - (c / maxCost) * ch;
+
+  const c1 = cssVar('--c1'), c2 = cssVar('--c2'), c3 = cssVar('--c3'), c6 = cssVar('--c6');
+  const gridCol = cssVar('--gridline'), baseCol = cssVar('--baseline');
+  const textMuted = cssVar('--text-muted'), textSec = cssVar('--text-secondary');
+
+  const ns = 'http://www.w3.org/2000/svg';
+  const el = (tag, attrs) => {
+    const e = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    return e;
+  };
+  const txt = (s, attrs) => {
+    const e = el('text', attrs);
+    e.textContent = s;
+    return e;
+  };
+
+  // gridlines
+  [0, 20, 40, 60, 80, 100].forEach(c => {
+    svg.appendChild(el('line', { x1: PAD.left, x2: W - PAD.right, y1: yScale(c), y2: yScale(c),
+      stroke: gridCol, 'stroke-width': 1 }));
+    svg.appendChild(txt(`$${c}`, { x: PAD.left - 6, y: yScale(c) + 4,
+      'text-anchor': 'end', 'font-size': 11, fill: textMuted }));
+  });
+
+  // x axis ticks
+  [0, 20, 40, 60, 80, 100, 120].forEach(s => {
+    svg.appendChild(el('line', { x1: xScale(s), x2: xScale(s),
+      y1: PAD.top + ch, y2: PAD.top + ch + 4, stroke: baseCol, 'stroke-width': 1 }));
+    svg.appendChild(txt(s, { x: xScale(s), y: PAD.top + ch + 16,
+      'text-anchor': 'middle', 'font-size': 11, fill: textMuted }));
+  });
+
+  // axis baseline
+  svg.appendChild(el('line', { x1: PAD.left, x2: W - PAD.right,
+    y1: PAD.top + ch, y2: PAD.top + ch, stroke: baseCol, 'stroke-width': 1.5 }));
+
+  // x-axis label
+  svg.appendChild(txt('Sessions per month', { x: PAD.left + cw / 2, y: H - 2,
+    'text-anchor': 'middle', 'font-size': 11, fill: textMuted }));
+
+  // Pro flat lines
+  [[PRO_COST, c6, '6,4', 'Pro $20/mo'], [PRO_MAX, c6, '3,6', 'Pro Max $100/mo']].forEach(([c, col, dash, label]) => {
+    svg.appendChild(el('line', { x1: PAD.left, x2: W - PAD.right,
+      y1: yScale(c), y2: yScale(c),
+      stroke: col, 'stroke-width': 2, 'stroke-dasharray': dash }));
+    svg.appendChild(txt(label, { x: W - PAD.right + 2, y: yScale(c) + 4,
+      'font-size': 10, fill: col, display: 'none' }));
+  });
+
+  // API lines
+  const lineColors = [c2, c1, c3];
+  costs.forEach((m, i) => {
+    const pts = [];
+    for (let s = 0; s <= maxSessions; s += 2) pts.push(`${xScale(s)},${yScale(m.cost * s)}`);
+    svg.appendChild(el('polyline', {
+      points: pts.join(' '), fill: 'none',
+      stroke: lineColors[i], 'stroke-width': 2, 'stroke-linecap': 'round'
+    }));
+    // break-even dot
+    const be = PRO_COST / m.cost;
+    if (be <= maxSessions) {
+      const bx = xScale(be), by = yScale(PRO_COST);
+      svg.appendChild(el('circle', { cx: bx, cy: by, r: 5,
+        fill: lineColors[i], stroke: cssVar('--surface-1'), 'stroke-width': 2 }));
+    }
+  });
+
+  // hover overlay
+  const overlay = el('rect', { x: PAD.left, y: PAD.top, width: cw, height: ch,
+    fill: 'transparent', style: 'cursor:crosshair' });
+  const vline = el('line', { x1: 0, x2: 0, y1: PAD.top, y2: PAD.top + ch,
+    stroke: textMuted, 'stroke-width': 1, 'stroke-dasharray': '3,3', display: 'none' });
+  svg.appendChild(vline);
+  svg.appendChild(overlay);
+
+  const tooltip = document.getElementById('lc-tooltip');
+  overlay.addEventListener('mousemove', e => {
+    const rect = svg.getBoundingClientRect();
+    const scaleX = W / rect.width;
+    const px = (e.clientX - rect.left) * scaleX;
+    const session = Math.round((px - PAD.left) / cw * maxSessions);
+    if (session < 0 || session > maxSessions) { tooltip.style.display = 'none'; vline.setAttribute('display','none'); return; }
+
+    const svgX = xScale(session);
+    vline.setAttribute('x1', svgX); vline.setAttribute('x2', svgX);
+    vline.setAttribute('display','');
+
+    let html = `<div style="font-weight:600;margin-bottom:4px">${session} sessions/mo</div>`;
+    costs.forEach((m, i) => {
+      const mc = m.cost * session;
+      html += `<div class="tt-row"><div class="tt-swatch" style="background:${lineColors[i]}"></div>${m.name}: <strong>$${mc.toFixed(2)}</strong></div>`;
+    });
+    html += `<div class="tt-row" style="margin-top:4px;border-top:1px solid rgba(255,255,255,.2);padding-top:4px"><div class="tt-swatch" style="background:${c6}"></div>Pro: <strong>$${PRO_COST}</strong></div>`;
+    tooltip.innerHTML = html;
+    tooltip.style.display = 'block';
+
+    const chartEl = document.getElementById('breakeven-chart');
+    const cr = chartEl.getBoundingClientRect();
+    const tx = e.clientX - cr.left + 12;
+    const ty = e.clientY - cr.top  - 40;
+    tooltip.style.left = Math.min(tx, cr.width - 180) + 'px';
+    tooltip.style.top  = Math.max(ty, 0) + 'px';
+  });
+  overlay.addEventListener('mouseleave', () => {
+    tooltip.style.display = 'none';
+    vline.setAttribute('display','none');
+  });
+}
+
+/* ── Cost breakdown bars ─────────────────────────────────────────── */
+function renderBars() {
+  const M = 1_000_000;
+  const sonnet = costs[1];
+  const total = sonnet.cost;
+  const uncached = (SESSION.input + SESSION.cacheWrite + SESSION.cacheRead) * sonnet.inp / M
+                 + SESSION.output * sonnet.out / M;
+
+  const segments = [
+    { label: 'Cache write', tokens: SESSION.cacheWrite, cost: SESSION.cacheWrite * sonnet.cw / M, color: 'var(--seq-450)' },
+    { label: 'Output',      tokens: SESSION.output,     cost: SESSION.output     * sonnet.out / M, color: 'var(--seq-600)' },
+    { label: 'Cache read',  tokens: SESSION.cacheRead,  cost: SESSION.cacheRead  * sonnet.cr / M,  color: 'var(--seq-300)' },
+    { label: 'Direct input',tokens: SESSION.input,      cost: SESSION.input      * sonnet.inp / M, color: 'var(--seq-100)' },
+  ];
+
+  const container = document.getElementById('cost-bars');
+
+  // Actual cost bar
+  const actualDiv = document.createElement('div');
+  actualDiv.className = 'cost-row';
+  actualDiv.innerHTML = `<div class="cost-row-label"><strong>Actual cost (with caching)</strong><span>$${total.toFixed(4)}</span></div>`;
+  const track = document.createElement('div');
+  track.className = 'bar-track';
+  segments.forEach(s => {
+    const pct = (s.cost / total * 100).toFixed(1);
+    if (parseFloat(pct) < 0.1) return;
+    const seg = document.createElement('div');
+    seg.className = 'bar-seg';
+    seg.style.cssText = `width:${pct}%;background:${s.color}`;
+    seg.innerHTML = `<div class="bar-tip">${s.label}: $${s.cost.toFixed(5)} (${s.tokens.toLocaleString()} tok)</div>`;
+    track.appendChild(seg);
+  });
+  actualDiv.appendChild(track);
+  container.appendChild(actualDiv);
+
+  // Uncached cost bar (wider — as if all tokens billed at input rate)
+  const uncachedDiv = document.createElement('div');
+  uncachedDiv.className = 'cost-row';
+  uncachedDiv.innerHTML = `<div class="cost-row-label"><strong>Without caching (hypothetical)</strong><span>$${uncached.toFixed(4)}</span></div>`;
+  const track2 = document.createElement('div');
+  track2.className = 'bar-track';
+  const scaledPct = (total / uncached * 100).toFixed(1);
+  const seg2 = document.createElement('div');
+  seg2.className = 'bar-seg';
+  seg2.style.cssText = `width:${scaledPct}%;background:var(--c1)`;
+  seg2.innerHTML = `<div class="bar-tip">Actual cost: $${total.toFixed(4)}</div>`;
+  const seg3 = document.createElement('div');
+  seg3.className = 'bar-seg';
+  seg3.style.cssText = `width:${(100-parseFloat(scaledPct)).toFixed(1)}%;background:var(--gridline)`;
+  seg3.innerHTML = `<div class="bar-tip">Saved by caching: $${(uncached-total).toFixed(4)}</div>`;
+  track2.appendChild(seg2);
+  track2.appendChild(seg3);
+  uncachedDiv.appendChild(track2);
+  container.appendChild(uncachedDiv);
+}
+
+/* ── Model comparison table ──────────────────────────────────────── */
+function renderModelTable() {
+  const tbody = document.getElementById('model-table');
+  costs.forEach((m, i) => {
+    const be = Math.round(PRO_COST / m.cost);
+    const sonnet = i === 1;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${sonnet ? `<strong>${m.name}</strong> (current)` : m.name}</td>
+      <td class="num">$${m.inp.toFixed(2)}</td>
+      <td class="num">$${m.cw.toFixed(2)}</td>
+      <td class="num">$${m.cr.toFixed(2)}</td>
+      <td class="num">$${m.out.toFixed(2)}</td>
+      <td class="num ${sonnet ? 'winner' : ''}">$${m.cost.toFixed(4)}</td>
+      <td class="num">~${be} sessions</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+/* ── Monthly lookup table ────────────────────────────────────────── */
+function renderLookupTable() {
+  const tbody = document.querySelector('#lookup-table tbody');
+  const sonnet = costs[1];
+  const scenarios = [
+    ['Occasional (few times/week)', 10],
+    ['Light (every other day)',     15],
+    ['Moderate (1/day)',            30],
+    ['Active (1.5/day)',            45],
+    ['Break-even (~)',              Math.round(PRO_COST / sonnet.cost)],
+    ['Heavy (2/day)',               60],
+    ['Very heavy (3/day)',          90],
+    ['Power user (4/day)',         120],
+  ];
+  scenarios.forEach(([label, s]) => {
+    const api = sonnet.cost * s;
+    const proWins = api < PRO_COST;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${label}</td>
+      <td class="num">${s}</td>
+      <td class="num ${proWins ? 'loser' : 'winner'}">$${api.toFixed(2)}</td>
+      <td class="num ${proWins ? 'winner' : 'loser'}">$${PRO_COST.toFixed(2)}</td>
+      <td>${proWins ? '✓ Pro cheaper' : '✓ API cheaper'}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+/* ── Theme toggle ─────────────────────────────────────────────────── */
+function toggleTheme() {
+  const root = document.documentElement;
+  const cur = root.getAttribute('data-theme');
+  const next = (cur === 'dark') ? 'light' : 'dark';
+  root.setAttribute('data-theme', next);
+  renderLineChart();
+}
+
+/* ── Init ─────────────────────────────────────────────────────────── */
+renderLineChart();
+renderBars();
+renderModelTable();
+renderLookupTable();
+window.addEventListener('resize', renderLineChart);
+</script>
+</body>
+</html>
