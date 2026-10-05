@@ -1,0 +1,3686 @@
+From 0c90c30a40f3f83f030e755e57f69aacb86e31a2 Mon Sep 17 00:00:00 2001
+From: benny1979 <aldridge.b@googlemail.com>
+Date: Sun, 4 Oct 2026 14:30:19 +0000
+Subject: [PATCH] Add iPad Remote: draw on the overlay from an iPad via a relay
+
+- Main: remote bridge connects to a Cloudflare relay, forwards iPad input
+  to the renderer and streams JPEG screenshots of the drawing display
+- Click-through overlay mode so drawings show while the PC stays usable
+- Pairing window with QR code (tray > iPad Remote...)
+- Renderer applies remote input through the existing mouse/tool handlers
+- remote/relay: Worker + Durable Object relay and the iPad Safari page
+- Disable auto-update so upstream builds don't replace the fork
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RHSWpRZ2fTxirLcvPM2kDp
+---
+ package-lock.json                             |  207 ++-
+ package.json                                  |    1 +
+ remote/README.md                              |   75 +
+ remote/relay/.gitignore                       |    2 +
+ remote/relay/package-lock.json                | 1542 +++++++++++++++++
+ remote/relay/package.json                     |   11 +
+ remote/relay/public/index.html                |  589 +++++++
+ remote/relay/src/index.js                     |   91 +
+ remote/relay/wrangler.toml                    |   15 +
+ src/main/index.js                             |  204 ++-
+ src/main/remote.js                            |  338 ++++
+ .../app_page/components/Application.js        |   69 +
+ src/renderer/app_page/components/constants.js |    1 +
+ src/renderer/app_page/preload.js              |    1 +
+ src/renderer/remote_page/index.html           |   48 +
+ src/renderer/remote_page/index.js             |   63 +
+ src/renderer/remote_page/preload.js           |   14 +
+ tools/forge/forge.config.js                   |    8 +
+ 18 files changed, 3265 insertions(+), 14 deletions(-)
+ create mode 100644 remote/README.md
+ create mode 100644 remote/relay/.gitignore
+ create mode 100644 remote/relay/package-lock.json
+ create mode 100644 remote/relay/package.json
+ create mode 100644 remote/relay/public/index.html
+ create mode 100644 remote/relay/src/index.js
+ create mode 100644 remote/relay/wrangler.toml
+ create mode 100644 src/main/remote.js
+ create mode 100644 src/renderer/remote_page/index.html
+ create mode 100644 src/renderer/remote_page/index.js
+ create mode 100644 src/renderer/remote_page/preload.js
+
+diff --git a/package-lock.json b/package-lock.json
+index 42fb769..0940739 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -16,6 +16,7 @@
+         "ntcjs": "^1.1.3",
+         "perfect-freehand": "^1.2.3",
+         "posthog-node": "^5.46.1",
++        "qrcode": "^1.5.4",
+         "react": "^19.2.8",
+         "react-dom": "^19.2.8",
+         "react-icons": "5.7.0",
+@@ -3092,7 +3093,6 @@
+     },
+     "node_modules/ansi-regex": {
+       "version": "5.0.1",
+-      "dev": true,
+       "license": "MIT",
+       "engines": {
+         "node": ">=8"
+@@ -3102,7 +3102,6 @@
+       "version": "4.3.0",
+       "resolved": "https://registry.npmjs.org/ansi-styles/-/ansi-styles-4.3.0.tgz",
+       "integrity": "sha512-zbB9rCJAT1rbjiVDb2hqKFHNYLxgtk8NURxZ3IZwD3F6NtxbXZQCnnSi1Lkx+IDohdPlFp222wVALIheZJQSEg==",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "color-convert": "^2.0.1"
+@@ -3786,6 +3785,15 @@
+         "tslib": "^2.0.3"
+       }
+     },
++    "node_modules/camelcase": {
++      "version": "5.3.1",
++      "resolved": "https://registry.npmjs.org/camelcase/-/camelcase-5.3.1.tgz",
++      "integrity": "sha512-L28STB170nwWS63UjtlEOE3dldQApaJXZkOI1uMFfzf3rRuPegHaHesyee+YxQ+W6SvRDQV6UrdOdRiR153wJg==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=6"
++      }
++    },
+     "node_modules/caniuse-lite": {
+       "version": "1.0.30001806",
+       "resolved": "https://registry.npmjs.org/caniuse-lite/-/caniuse-lite-1.0.30001806.tgz",
+@@ -4054,7 +4062,6 @@
+       "version": "2.0.1",
+       "resolved": "https://registry.npmjs.org/color-convert/-/color-convert-2.0.1.tgz",
+       "integrity": "sha512-RRECPsj7iu/xb5oKYcsFHSppFNnsj/52OVTRKb4zP5onXwVF3zVmmToNcOfGC+CRDpfK/U584fMg38ZHCaElKQ==",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "color-name": "~1.1.4"
+@@ -4067,7 +4074,6 @@
+       "version": "1.1.4",
+       "resolved": "https://registry.npmjs.org/color-name/-/color-name-1.1.4.tgz",
+       "integrity": "sha512-dOy+3AuW3a2wNbZHIuMZpTcgjGuLU/uBL/ubcZF9OXbDo8ff4O8yVp5Bf0efS8uEoYo5q4Fx7dY9OgQGXgAsQA==",
+-      "dev": true,
+       "license": "MIT"
+     },
+     "node_modules/colorette": {
+@@ -4429,6 +4435,15 @@
+         }
+       }
+     },
++    "node_modules/decamelize": {
++      "version": "1.2.0",
++      "resolved": "https://registry.npmjs.org/decamelize/-/decamelize-1.2.0.tgz",
++      "integrity": "sha512-z2S+W9X73hAUUki+N+9Za2lBlun89zigOyGrsax+KUQ6wKW4ZoWpEYBkGhQjwAjjDCkWxhY0VKEhk8wzY7F5cA==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=0.10.0"
++      }
++    },
+     "node_modules/decompress-response": {
+       "version": "6.0.0",
+       "dev": true,
+@@ -4571,6 +4586,12 @@
+       "dev": true,
+       "license": "MIT"
+     },
++    "node_modules/dijkstrajs": {
++      "version": "1.0.3",
++      "resolved": "https://registry.npmjs.org/dijkstrajs/-/dijkstrajs-1.0.3.tgz",
++      "integrity": "sha512-qiSlmBq9+BCdCA/L46dw8Uy93mloxsPSbwnm5yrKn2vMPiy8KyAskTF6zuV/j5BMsmOGZDPs7KjU+mjb670kfA==",
++      "license": "MIT"
++    },
+     "node_modules/dir-compare": {
+       "version": "4.2.0",
+       "resolved": "https://registry.npmjs.org/dir-compare/-/dir-compare-4.2.0.tgz",
+@@ -5960,7 +5981,6 @@
+     },
+     "node_modules/get-caller-file": {
+       "version": "2.0.5",
+-      "dev": true,
+       "license": "ISC",
+       "engines": {
+         "node": "6.* || 8.* || >= 10.*"
+@@ -6740,7 +6760,6 @@
+     },
+     "node_modules/is-fullwidth-code-point": {
+       "version": "3.0.0",
+-      "dev": true,
+       "license": "MIT",
+       "engines": {
+         "node": ">=8"
+@@ -8362,7 +8381,6 @@
+     },
+     "node_modules/path-exists": {
+       "version": "4.0.0",
+-      "dev": true,
+       "license": "MIT",
+       "engines": {
+         "node": ">=8"
+@@ -8484,6 +8502,15 @@
+         "node": ">=10.4.0"
+       }
+     },
++    "node_modules/pngjs": {
++      "version": "5.0.0",
++      "resolved": "https://registry.npmjs.org/pngjs/-/pngjs-5.0.0.tgz",
++      "integrity": "sha512-40QW5YalBNfQo5yRYmiw7Yz6TKKVr3h6970B2YE+3fQpsWcrbj1PzJgxeJ19DRQjhMbKPIuMY8rFaXc8moolVw==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=10.13.0"
++      }
++    },
+     "node_modules/postcss": {
+       "version": "8.5.23",
+       "resolved": "https://registry.npmjs.org/postcss/-/postcss-8.5.23.tgz",
+@@ -8735,6 +8762,150 @@
+         "once": "^1.3.1"
+       }
+     },
++    "node_modules/qrcode": {
++      "version": "1.5.4",
++      "resolved": "https://registry.npmjs.org/qrcode/-/qrcode-1.5.4.tgz",
++      "integrity": "sha512-1ca71Zgiu6ORjHqFBDpnSMTR2ReToX4l1Au1VFLyVeBTFavzQnv5JxMFr3ukHVKpSrSA2MCk0lNJSykjUfz7Zg==",
++      "license": "MIT",
++      "dependencies": {
++        "dijkstrajs": "^1.0.1",
++        "pngjs": "^5.0.0",
++        "yargs": "^15.3.1"
++      },
++      "bin": {
++        "qrcode": "bin/qrcode"
++      },
++      "engines": {
++        "node": ">=10.13.0"
++      }
++    },
++    "node_modules/qrcode/node_modules/cliui": {
++      "version": "6.0.0",
++      "resolved": "https://registry.npmjs.org/cliui/-/cliui-6.0.0.tgz",
++      "integrity": "sha512-t6wbgtoCXvAzst7QgXxJYqPt0usEfbgQdftEPbLL/cvv6HPE5VgvqCuAIDR0NgU52ds6rFwqrgakNLrHEjCbrQ==",
++      "license": "ISC",
++      "dependencies": {
++        "string-width": "^4.2.0",
++        "strip-ansi": "^6.0.0",
++        "wrap-ansi": "^6.2.0"
++      }
++    },
++    "node_modules/qrcode/node_modules/find-up": {
++      "version": "4.1.0",
++      "resolved": "https://registry.npmjs.org/find-up/-/find-up-4.1.0.tgz",
++      "integrity": "sha512-PpOwAdQ/YlXQ2vj8a3h8IipDuYRi3wceVQQGYWxNINccq40Anw7BlsEXCMbt1Zt+OLA6Fq9suIpIWD0OsnISlw==",
++      "license": "MIT",
++      "dependencies": {
++        "locate-path": "^5.0.0",
++        "path-exists": "^4.0.0"
++      },
++      "engines": {
++        "node": ">=8"
++      }
++    },
++    "node_modules/qrcode/node_modules/locate-path": {
++      "version": "5.0.0",
++      "resolved": "https://registry.npmjs.org/locate-path/-/locate-path-5.0.0.tgz",
++      "integrity": "sha512-t7hw9pI+WvuwNJXwk5zVHpyhIqzg2qTlklJOf0mVxGSbe3Fp2VieZcduNYjaLDoy6p9uGpQEGWG87WpMKlNq8g==",
++      "license": "MIT",
++      "dependencies": {
++        "p-locate": "^4.1.0"
++      },
++      "engines": {
++        "node": ">=8"
++      }
++    },
++    "node_modules/qrcode/node_modules/p-limit": {
++      "version": "2.3.0",
++      "resolved": "https://registry.npmjs.org/p-limit/-/p-limit-2.3.0.tgz",
++      "integrity": "sha512-//88mFWSJx8lxCzwdAABTJL2MyWB12+eIY7MDL2SqLmAkeKU9qxRvWuSyTjm3FUmpBEMuFfckAIqEaVGUDxb6w==",
++      "license": "MIT",
++      "dependencies": {
++        "p-try": "^2.0.0"
++      },
++      "engines": {
++        "node": ">=6"
++      },
++      "funding": {
++        "url": "https://github.com/sponsors/sindresorhus"
++      }
++    },
++    "node_modules/qrcode/node_modules/p-locate": {
++      "version": "4.1.0",
++      "resolved": "https://registry.npmjs.org/p-locate/-/p-locate-4.1.0.tgz",
++      "integrity": "sha512-R79ZZ/0wAxKGu3oYMlz8jy/kbhsNrS7SKZ7PxEHBgJ5+F2mtFW2fK2cOtBh1cHYkQsbzFV7I+EoRKe6Yt0oK7A==",
++      "license": "MIT",
++      "dependencies": {
++        "p-limit": "^2.2.0"
++      },
++      "engines": {
++        "node": ">=8"
++      }
++    },
++    "node_modules/qrcode/node_modules/p-try": {
++      "version": "2.2.0",
++      "resolved": "https://registry.npmjs.org/p-try/-/p-try-2.2.0.tgz",
++      "integrity": "sha512-R4nPAVTAU0B9D35/Gk3uJf/7XYbQcyohSKdvAxIRSNghFl4e71hVoGnBNQz9cWaXxO2I10KTC+3jMdvvoKw6dQ==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=6"
++      }
++    },
++    "node_modules/qrcode/node_modules/wrap-ansi": {
++      "version": "6.2.0",
++      "resolved": "https://registry.npmjs.org/wrap-ansi/-/wrap-ansi-6.2.0.tgz",
++      "integrity": "sha512-r6lPcBGxZXlIcymEu7InxDMhdW0KDxpLgoFLcguasxCaJ/SOIZwINatK9KY/tf+ZrlywOKU0UDj3ATXUBfxJXA==",
++      "license": "MIT",
++      "dependencies": {
++        "ansi-styles": "^4.0.0",
++        "string-width": "^4.1.0",
++        "strip-ansi": "^6.0.0"
++      },
++      "engines": {
++        "node": ">=8"
++      }
++    },
++    "node_modules/qrcode/node_modules/y18n": {
++      "version": "4.0.3",
++      "resolved": "https://registry.npmjs.org/y18n/-/y18n-4.0.3.tgz",
++      "integrity": "sha512-JKhqTOwSrqNA1NY5lSztJ1GrBiUodLMmIZuLiDaMRJ+itFd+ABVE8XBjOvIWL+rSqNDC74LCSFmlb/U4UZ4hJQ==",
++      "license": "ISC"
++    },
++    "node_modules/qrcode/node_modules/yargs": {
++      "version": "15.4.1",
++      "resolved": "https://registry.npmjs.org/yargs/-/yargs-15.4.1.tgz",
++      "integrity": "sha512-aePbxDmcYW++PaqBsJ+HYUFwCdv4LVvdnhBy78E57PIor8/OVvhMrADFFEDh8DHDFRv/O9i3lPhsENjO7QX0+A==",
++      "license": "MIT",
++      "dependencies": {
++        "cliui": "^6.0.0",
++        "decamelize": "^1.2.0",
++        "find-up": "^4.1.0",
++        "get-caller-file": "^2.0.1",
++        "require-directory": "^2.1.1",
++        "require-main-filename": "^2.0.0",
++        "set-blocking": "^2.0.0",
++        "string-width": "^4.2.0",
++        "which-module": "^2.0.0",
++        "y18n": "^4.0.0",
++        "yargs-parser": "^18.1.2"
++      },
++      "engines": {
++        "node": ">=8"
++      }
++    },
++    "node_modules/qrcode/node_modules/yargs-parser": {
++      "version": "18.1.3",
++      "resolved": "https://registry.npmjs.org/yargs-parser/-/yargs-parser-18.1.3.tgz",
++      "integrity": "sha512-o50j0JeToy/4K6OZcaQmW6lyXXKhq7csREXcDwk2omFPJEwUNOVtJKvmDr9EI1fAJZUyZcRF7kxGBWmRXudrCQ==",
++      "license": "ISC",
++      "dependencies": {
++        "camelcase": "^5.0.0",
++        "decamelize": "^1.2.0"
++      },
++      "engines": {
++        "node": ">=6"
++      }
++    },
+     "node_modules/qs": {
+       "version": "6.15.3",
+       "resolved": "https://registry.npmjs.org/qs/-/qs-6.15.3.tgz",
+@@ -9021,7 +9192,6 @@
+     },
+     "node_modules/require-directory": {
+       "version": "2.1.1",
+-      "dev": true,
+       "license": "MIT",
+       "engines": {
+         "node": ">=0.10.0"
+@@ -9034,6 +9204,12 @@
+         "node": ">=0.10.0"
+       }
+     },
++    "node_modules/require-main-filename": {
++      "version": "2.0.0",
++      "resolved": "https://registry.npmjs.org/require-main-filename/-/require-main-filename-2.0.0.tgz",
++      "integrity": "sha512-NKN5kMDylKuldxYLSUfrbo5Tuzh4hd+2E8NPPX02mZtn1VuREQToYe/ZdlJy+J3uCpfaiGF05e7B8W0iXbQHmg==",
++      "license": "ISC"
++    },
+     "node_modules/requires-port": {
+       "version": "1.0.0",
+       "dev": true,
+@@ -9526,6 +9702,12 @@
+         "node": ">= 0.8.0"
+       }
+     },
++    "node_modules/set-blocking": {
++      "version": "2.0.0",
++      "resolved": "https://registry.npmjs.org/set-blocking/-/set-blocking-2.0.0.tgz",
++      "integrity": "sha512-KiKBS8AnWGEyLzofFfmvKwpdPzqiy16LvQfK3yv/fVH7Bj13/wl3JSR1J+rfgRE9q7xUJK4qvgS8raSOeLUehw==",
++      "license": "ISC"
++    },
+     "node_modules/setprototypeof": {
+       "version": "1.2.0",
+       "resolved": "https://registry.npmjs.org/setprototypeof/-/setprototypeof-1.2.0.tgz",
+@@ -9879,7 +10061,6 @@
+     },
+     "node_modules/string-width": {
+       "version": "4.2.3",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "emoji-regex": "^8.0.0",
+@@ -9892,12 +10073,10 @@
+     },
+     "node_modules/string-width/node_modules/emoji-regex": {
+       "version": "8.0.0",
+-      "dev": true,
+       "license": "MIT"
+     },
+     "node_modules/strip-ansi": {
+       "version": "6.0.1",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "ansi-regex": "^5.0.1"
+@@ -10945,6 +11124,12 @@
+         "node": ">= 8"
+       }
+     },
++    "node_modules/which-module": {
++      "version": "2.0.1",
++      "resolved": "https://registry.npmjs.org/which-module/-/which-module-2.0.1.tgz",
++      "integrity": "sha512-iBdZ57RDvnOR9AGBhML2vFZf7h8vmBjhoaZqODJBFWHVtKkDmKuHai3cx5PgVMrX5YDNp27AofYbAwctSS+vhQ==",
++      "license": "ISC"
++    },
+     "node_modules/wildcard": {
+       "version": "2.0.1",
+       "dev": true,
+diff --git a/package.json b/package.json
+index cc22617..4f70b85 100644
+--- a/package.json
++++ b/package.json
+@@ -59,6 +59,7 @@
+     "ntcjs": "^1.1.3",
+     "perfect-freehand": "^1.2.3",
+     "posthog-node": "^5.46.1",
++    "qrcode": "^1.5.4",
+     "react": "^19.2.8",
+     "react-dom": "^19.2.8",
+     "react-icons": "5.7.0",
+diff --git a/remote/README.md b/remote/README.md
+new file mode 100644
+index 0000000..3b5bb6d
+--- /dev/null
++++ b/remote/README.md
+@@ -0,0 +1,75 @@
++# iPad Remote
++
++Draw on the DrawPen overlay from an iPad (Apple Pencil). The iPad shows a screenshot of the PC
++screen, refreshed about once a second; strokes are drawn by DrawPen on the PC, so they appear on
++the projector and in any screen share.
++
++```
++DrawPen (PC)  <-- wss -->  Relay (Cloudflare Worker)  <-- wss -->  iPad (Safari page)
++  overlay + screenshots       forwards messages              Pencil input + toolbar
++```
++
++Both sides connect outward to the relay, so the PC and iPad do not need to be on the same network.
++
++## 1. Deploy the relay (once)
++
++Needs Node 22 and a free Cloudflare account.
++
++```
++cd remote/relay
++npm install
++npx wrangler login
++npx wrangler deploy
++```
++
++Note the URL it prints, e.g. `https://drawpen-relay.<your-subdomain>.workers.dev`.
++
++## 2. Run DrawPen on Windows
++
++```
++npm install
++npx electron-forge start
++```
++
++(`npm start` sets `NODE_ENV` with Unix syntax and runs a 500x500 dev window; use the command above
++for a normal full-screen overlay. `npm run make` builds an installer.)
++
++## 3. Pair
++
++1. Tray icon → **iPad Remote...**
++2. Paste the relay URL → **Save** → **Connect**.
++3. Scan the QR code with the iPad camera. Optional: Share → **Add to Home Screen** for full screen.
++
++The pairing code is remembered, so the iPad can reconnect later from the same link.
++**New pairing code** revokes the old link.
++
++## Use
++
++- Draw with the Pencil. Fingers only work on the toolbar unless **finger** is on.
++- The PC stays usable: drawings show on a click-through overlay, so the mouse and keyboard still
++  control the presented app. The DrawPen shortcut (Ctrl+Shift+A) still switches to local drawing.
++- **overlay** hides/shows the drawings on the PC; **clear** removes them; **board** toggles the
++  whiteboard.
++
++## Limits
++
++- The iPad image is a screenshot about once a second, not video: fine for slides and documents,
++  not for video or animations.
++- Anyone with the pairing link can draw on and see the PC screen. Keep it private.
++- Protected content (DRM video) and the Windows secure desktop show black.
++- This fork disables DrawPen's auto-update, which would replace it with upstream builds.
++
++## Protocol
++
++JSON text messages; screenshots are binary JPEG, each preceded by a `frame` message.
++
++| From | Message |
++| --- | --- |
++| iPad | `down {p}`, `move {pts}`, `up {p, seq}` - points normalized 0..1 to the drawing area |
++| iPad | `tool {tool}`, `color {index}`, `width {index}`, `undo`, `redo` |
++| iPad | `clear`, `whiteboard`, `overlay {visible}`, `frame` (request screenshot), `hi` |
++| PC | `hello {w, h, colors, overlay}`, `overlay_state {visible}`, `frame {seq, w, h}` + JPEG |
++| Relay | `peer {role, connected}` |
++
++`frame.seq` is the last stroke the PC applied before capturing, so the iPad can drop its local
++preview of strokes that are now in the image.
+diff --git a/remote/relay/.gitignore b/remote/relay/.gitignore
+new file mode 100644
+index 0000000..41a2578
+--- /dev/null
++++ b/remote/relay/.gitignore
+@@ -0,0 +1,2 @@
++.wrangler/
++node_modules/
+diff --git a/remote/relay/package-lock.json b/remote/relay/package-lock.json
+new file mode 100644
+index 0000000..71e1504
+--- /dev/null
++++ b/remote/relay/package-lock.json
+@@ -0,0 +1,1542 @@
++{
++  "name": "drawpen-relay",
++  "lockfileVersion": 3,
++  "requires": true,
++  "packages": {
++    "": {
++      "name": "drawpen-relay",
++      "devDependencies": {
++        "wrangler": "^4.0.0"
++      }
++    },
++    "node_modules/@cloudflare/kv-asset-handler": {
++      "version": "0.5.0",
++      "resolved": "https://registry.npmjs.org/@cloudflare/kv-asset-handler/-/kv-asset-handler-0.5.0.tgz",
++      "integrity": "sha512-jxQYkj8dSIzc0cD6cMMNdOc1UVjqSqu8BZdor5s8cGjW2I8BjODt/kWPVdY+u9zj3ms75Q5qaZgnxUad83+eAg==",
++      "dev": true,
++      "license": "MIT OR Apache-2.0",
++      "engines": {
++        "node": ">=22.0.0"
++      }
++    },
++    "node_modules/@cloudflare/unenv-preset": {
++      "version": "2.16.2",
++      "resolved": "https://registry.npmjs.org/@cloudflare/unenv-preset/-/unenv-preset-2.16.2.tgz",
++      "integrity": "sha512-JBP1+Z7ZSNG/d4mRP+y8VC5dka3tZVMLEZRvS+rzQ4DGV1EoxRFQckcJTTkXbHSQiTj0DtNI01Zwb/V2fX0mvQ==",
++      "dev": true,
++      "license": "MIT OR Apache-2.0",
++      "peerDependencies": {
++        "unenv": "2.0.0-rc.24",
++        "workerd": ">1.20260305.0 <2.0.0-0"
++      },
++      "peerDependenciesMeta": {
++        "workerd": {
++          "optional": true
++        }
++      }
++    },
++    "node_modules/@cloudflare/workerd-darwin-64": {
++      "version": "1.20261001.1",
++      "resolved": "https://registry.npmjs.org/@cloudflare/workerd-darwin-64/-/workerd-darwin-64-1.20261001.1.tgz",
++      "integrity": "sha512-4cgSgDf28JSw/P5Dj5GCS59hzVqS5XnmGAWNkvYHLI6ODU9idGaMMNEuhJXDkEG/lsABmlVlnCgsdh2VbKWepw==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "engines": {
++        "node": ">=16"
++      }
++    },
++    "node_modules/@cloudflare/workerd-darwin-arm64": {
++      "version": "1.20261001.1",
++      "resolved": "https://registry.npmjs.org/@cloudflare/workerd-darwin-arm64/-/workerd-darwin-arm64-1.20261001.1.tgz",
++      "integrity": "sha512-8ulAWruEVouNmEIsQsy9WSSCS9zkLu93W2MTwp5esiFyoPp05BNSVFIFsYSPi1pkFmBBd7fsnwMpbLkaJLaVPQ==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "engines": {
++        "node": ">=16"
++      }
++    },
++    "node_modules/@cloudflare/workerd-linux-64": {
++      "version": "1.20261001.1",
++      "resolved": "https://registry.npmjs.org/@cloudflare/workerd-linux-64/-/workerd-linux-64-1.20261001.1.tgz",
++      "integrity": "sha512-kZbTZJGrhsMOdqZ2BIybjaBRLZjYsRLWj7mcNw/6Y3hodOhp5MrNzcz4iWGwNVWwyIV+7Pl+/LX5VcgnRqdHOg==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=16"
++      }
++    },
++    "node_modules/@cloudflare/workerd-linux-arm64": {
++      "version": "1.20261001.1",
++      "resolved": "https://registry.npmjs.org/@cloudflare/workerd-linux-arm64/-/workerd-linux-arm64-1.20261001.1.tgz",
++      "integrity": "sha512-oOk3Zj6k/8oP0FJgZBWDn7+BqbsqIMEMaV95pulHPVbwVu4wYoLfQq2hp0vkbCNsCFLqZb7cqixXdrwD54ZIow==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=16"
++      }
++    },
++    "node_modules/@cloudflare/workerd-windows-64": {
++      "version": "1.20261001.1",
++      "resolved": "https://registry.npmjs.org/@cloudflare/workerd-windows-64/-/workerd-windows-64-1.20261001.1.tgz",
++      "integrity": "sha512-uRxm5W4VyBkoSaoP1BfOuH0873tE+vxsknF4sab6/5YIRvIAufChq3QDp+zlAn67PuGPGcn7W8QraA0t4ucmOQ==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": ">=16"
++      }
++    },
++    "node_modules/@cspotcode/source-map-support": {
++      "version": "0.8.1",
++      "resolved": "https://registry.npmjs.org/@cspotcode/source-map-support/-/source-map-support-0.8.1.tgz",
++      "integrity": "sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@jridgewell/trace-mapping": "0.3.9"
++      },
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@emnapi/runtime": {
++      "version": "1.11.3",
++      "resolved": "https://registry.npmjs.org/@emnapi/runtime/-/runtime-1.11.3.tgz",
++      "integrity": "sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA==",
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "dependencies": {
++        "tslib": "^2.4.0"
++      }
++    },
++    "node_modules/@esbuild/aix-ppc64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/aix-ppc64/-/aix-ppc64-0.28.1.tgz",
++      "integrity": "sha512-Svl7tq8k/08+p6CXPpRjQ1fKX+1odH/BQbb48fV6fj3CWHhsoIOoY87w1oHXm0qEpkIK3ZfVgp0hed3XBXzXMQ==",
++      "cpu": [
++        "ppc64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "aix"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/android-arm": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/android-arm/-/android-arm-0.28.1.tgz",
++      "integrity": "sha512-0k2F129Xdio1TdJfzJ8sy1Q47vUD2NnwdhiAf7drUN1EBTfPf4hsFCtmMgu/6m8JSzsBrlmVjudMBQqOfG8usQ==",
++      "cpu": [
++        "arm"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "android"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/android-arm64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/android-arm64/-/android-arm64-0.28.1.tgz",
++      "integrity": "sha512-34EGEbCIAgosYz6goLcopX6Mo7NyGv9tfwEM2/7Ce2VcVRk568iSvniGWcUXIy7wEDR1wzolcxcriFVrWYcwBg==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "android"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/android-x64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/android-x64/-/android-x64-0.28.1.tgz",
++      "integrity": "sha512-dbwY7ltSMDWsRatcRpCnES4F+im88OCUgGZjy52shC7GqHRE/cYlxNbB4Z4UpJswpcc4Qxd2oE/ufM0p61IKng==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "android"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/darwin-arm64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-0.28.1.tgz",
++      "integrity": "sha512-TZbWkQY7kvTAXbXUT7uVACR5cMHsDiSz9z7ZKAX/RTq/WJEk3QyRr0wZpNhBDX+/0CtdqUIJlOiodQcta6tY3Q==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/darwin-x64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/darwin-x64/-/darwin-x64-0.28.1.tgz",
++      "integrity": "sha512-zfdzgK9ACBNZLI/CyHTOx81SyNbM6YXn7rxSgX97VjyiPl9W1i4Ka4fgKECEoFCKGpvBj5qArWIGgQjOwkgskQ==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/freebsd-arm64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/freebsd-arm64/-/freebsd-arm64-0.28.1.tgz",
++      "integrity": "sha512-wG2EA8ENdEI0qhkSZMjfqrdY+ziCYCPMmtZjjIwOmXFjmyzEHn+UUxk5of+SYsjtfs3VpnlC7QLzSI5hY/rOAw==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "freebsd"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/freebsd-x64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/freebsd-x64/-/freebsd-x64-0.28.1.tgz",
++      "integrity": "sha512-i7dZ9vQgnvSCzi/rYCXNgtF/U+eKZNJBzu3eTQbRgHnM7tNSizLOkRFAl3qzVc/Op/u5YkHHa4pf/3DOYHthLQ==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "freebsd"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/linux-arm": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-arm/-/linux-arm-0.28.1.tgz",
++      "integrity": "sha512-qVXBOHQS+d5Y722GwJzJUtOLlX7km3CraOaGormF1pDtPd2C/l1SHRPgjLunLGe51Sh5YYWKMFDyV4SxgMQYTQ==",
++      "cpu": [
++        "arm"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/linux-arm64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-arm64/-/linux-arm64-0.28.1.tgz",
++      "integrity": "sha512-yHs+0uc8+nvEAfAfxrWQKK5peSNzBc4PegcMO0EJ2hT71uA7vB8Ihg2e77R2P7SG5uYjPbHlLLmve4LLLRCf0g==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/linux-ia32": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-ia32/-/linux-ia32-0.28.1.tgz",
++      "integrity": "sha512-d1z4ZuP0ajrfz/FhGT4vv278rX8KnPPJx8i5+AtK7TYbx9Le9F1hyzurZpkEyjkGa9dUGhQow4C1NmeGvqxN2w==",
++      "cpu": [
++        "ia32"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/linux-loong64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-loong64/-/linux-loong64-0.28.1.tgz",
++      "integrity": "sha512-M5sRjUVZrkm1OAPR3dlOYzNmN+loZKGVi1VUQGrwuqLcbR6qeAz+famMhjASeH3YVKvZz+zT1jlh/keC3Rj/lg==",
++      "cpu": [
++        "loong64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/linux-mips64el": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-mips64el/-/linux-mips64el-0.28.1.tgz",
++      "integrity": "sha512-mRObBZeHh2OxcBFPWE/FjylkRgZdYuiTR3vaTozquCGOH14iP9oN4x4Ge81CoIDYQrXmIxpFumJBu5MtZpnQJQ==",
++      "cpu": [
++        "mips64el"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/linux-ppc64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-ppc64/-/linux-ppc64-0.28.1.tgz",
++      "integrity": "sha512-slScBsMAb3GFDcdrCgLwZtPYRoH2H/youv10QiZyRjmsP48fznoveWytSgCI/R0ZcUgpc0ZhIUEx6LHts8yrfQ==",
++      "cpu": [
++        "ppc64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/linux-riscv64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-riscv64/-/linux-riscv64-0.28.1.tgz",
++      "integrity": "sha512-kw0owk1o0GFETUJyW0jc0G4Yzs0BHZn0JDZ8JRT088vjJYX777BAs1fDGxAC+q831qOs2DTC96mNsG2opdfyyQ==",
++      "cpu": [
++        "riscv64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/linux-s390x": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-s390x/-/linux-s390x-0.28.1.tgz",
++      "integrity": "sha512-/lAIjX8aYFRByhh6L5rYtPEDRqa9de/4V/juOXcta5frjvzXO4/sqEtyytse0g3zZFuWu5cDN0MkLz2qRDD2Ag==",
++      "cpu": [
++        "s390x"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/linux-x64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.28.1.tgz",
++      "integrity": "sha512-u/anNYF2mmVOEDwLtnQ1wOr3EZ9sTNGLWrsYGYwHWzGA3Si84IOkHXlbWTD1NB+9/1lcnweYKO54uhxZydNzfA==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/netbsd-arm64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/netbsd-arm64/-/netbsd-arm64-0.28.1.tgz",
++      "integrity": "sha512-oks0DYbLwWMmaakTsCb+zL4E+aHRVLom9IJZOAthMQEPiQmydXHkziYEsGYRx0uNV/IjEKGAV941JzH02pflqw==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "netbsd"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/netbsd-x64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/netbsd-x64/-/netbsd-x64-0.28.1.tgz",
++      "integrity": "sha512-aeL6lAnN89Hz43Mlh1G8ARasbuoYvSITDEx0tHh5b7jJnHcssqgjy9Yx430GDpmCa6OyrKoS0aNRjKundRizGg==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "netbsd"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/openbsd-arm64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/openbsd-arm64/-/openbsd-arm64-0.28.1.tgz",
++      "integrity": "sha512-MEFJe5C3R8pwXdZ5Y21oo6m7ePiS0d9pWucn99O/wvyJZChoIQKrQDxKrGeW8F5+T0okTHesAmDeiHDTIq0V/Q==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "openbsd"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/openbsd-x64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/openbsd-x64/-/openbsd-x64-0.28.1.tgz",
++      "integrity": "sha512-i/ZLIOafE0Z8cI/XANJAixoJL/uRAoS2xOA3rb0xN+KK0K177cMAsQYkzHtBrtMXAKuAc7HGgcWiZ/sRC1Nxgw==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "openbsd"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/openharmony-arm64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/openharmony-arm64/-/openharmony-arm64-0.28.1.tgz",
++      "integrity": "sha512-ge+Z7EXFNt2BO1oAMsVpiQ8EwndV9i1xXerAeTIK7AtPs3bKFXQM7nlRxDSIUIMeueR1CNXxqztLzdNeReKBJg==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "openharmony"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/sunos-x64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/sunos-x64/-/sunos-x64-0.28.1.tgz",
++      "integrity": "sha512-BEjgtECkL3vY+SaSQ6nzVfiALUeFxpawyp8Jmf5PtYhf1Ug40N1h/hxlhts+f1FvSvarEigdxS3BlSMI2PJLcQ==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "sunos"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/win32-arm64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/win32-arm64/-/win32-arm64-0.28.1.tgz",
++      "integrity": "sha512-lCv9eK/H6ZJWbE7bh2nw54CZ9M2nupBxJcTsdk/QQnWkdSjKGuxmmH8/GWrlT1eMmZfn4dGcCjRte397WqfQXA==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/win32-ia32": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/win32-ia32/-/win32-ia32-0.28.1.tgz",
++      "integrity": "sha512-zvb/mB2bSCoJOpoCBgYKKpX6YM6mJBlBUVUtVj41DlZJVEB6/0CKlRYxP5wWl1C1ILiCoAU5wZZ4q1P3qeS6Eg==",
++      "cpu": [
++        "ia32"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@esbuild/win32-x64": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/@esbuild/win32-x64/-/win32-x64-0.28.1.tgz",
++      "integrity": "sha512-bm4Mowrv+GXMlpWX++EcXw/iLyd1o3+bJkC2DkWXYVvgZCqD/bSj9ctZeAMC3cIxgjRVR2Dufaiu4YPxr5gW1A==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@img/colour": {
++      "version": "1.1.0",
++      "resolved": "https://registry.npmjs.org/@img/colour/-/colour-1.1.0.tgz",
++      "integrity": "sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@img/sharp-darwin-arm64": {
++      "version": "0.35.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-darwin-arm64/-/sharp-darwin-arm64-0.35.4.tgz",
++      "integrity": "sha512-Uhfl4V4lhP2nbUVF9+hyH1+luj86f1gUFeo8ALYxFoULoU+G87D43BfeMP8XHsk9boxAnCY/bf2EHwhA7MuGsA==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-darwin-arm64": "1.3.3"
++      }
++    },
++    "node_modules/@img/sharp-darwin-x64": {
++      "version": "0.35.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-darwin-x64/-/sharp-darwin-x64-0.35.4.tgz",
++      "integrity": "sha512-hWniXY3bG5qKpkKrAwPe4y+VTPmf086YQAnkxWh7uA1YrlRouWGa0M0Mxj3ZjnXFkv7/TD1bTy9lGUK26vRvWw==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-darwin-x64": "1.3.3"
++      }
++    },
++    "node_modules/@img/sharp-freebsd-wasm32": {
++      "version": "0.35.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-freebsd-wasm32/-/sharp-freebsd-wasm32-0.35.4.tgz",
++      "integrity": "sha512-lIsKw/BU+kjB4eZjxrYrZmwOJYi3Ajrv66iAlBmUPyKc3HpnloevB1g3wxGD9P/5BbQ1brBGl65VRRrCvQDEqA==",
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "freebsd"
++      ],
++      "dependencies": {
++        "@img/sharp-wasm32": "0.35.4"
++      },
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-darwin-arm64": {
++      "version": "1.3.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-darwin-arm64/-/sharp-libvips-darwin-arm64-1.3.3.tgz",
++      "integrity": "sha512-suTBPTDGrI9WodccaDdwZItTSaBYASlBk1NSfElSHrUfzu3szG6lvIF58+WiFvnfzuK8ZBFS5zE00PxqxnRiPg==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-darwin-x64": {
++      "version": "1.3.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-darwin-x64/-/sharp-libvips-darwin-x64-1.3.3.tgz",
++      "integrity": "sha512-FVJZ5mITMobmXIz/hPDTw0EintTW5H3WfrxwLqEqjiIihlu+hVRyGrFQ60xl0Lxn7Bt3zdpevPaQi0HEzqz9fw==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-linux-arm": {
++      "version": "1.3.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm/-/sharp-libvips-linux-arm-1.3.3.tgz",
++      "integrity": "sha512-3rbU4vqXXc3hY/OiXdl52xZvT0F1yEngWfvqudtPJg/KkyiaQw2DRsFrNzpmLvfavbwOq3qXn36GP8obHRULQA==",
++      "cpu": [
++        "arm"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-linux-arm64": {
++      "version": "1.3.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm64/-/sharp-libvips-linux-arm64-1.3.3.tgz",
++      "integrity": "sha512-0DaL0A6Xu6sQSQFwe4iVCrKWU2cCTItnRsYsCdxAMm9NF6twAA9BKnoqy4hqz4+azQ0JHuA26qiUKsf1XJ/v5A==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-linux-ppc64": {
++      "version": "1.3.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-ppc64/-/sharp-libvips-linux-ppc64-1.3.3.tgz",
++      "integrity": "sha512-cdn1OvUBwsXhbC0zSzJnNzf5MZ/mTrobawDvNXBTxe8VtqKAm0sRuEY2Evzovb/w9JMk4TvRxqt1mekSuJz64w==",
++      "cpu": [
++        "ppc64"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-linux-riscv64": {
++      "version": "1.3.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-riscv64/-/sharp-libvips-linux-riscv64-1.3.3.tgz",
++      "integrity": "sha512-HjPVx7yKz+0lqdhDlTw1tt90wamBoxhiXpvl1XZpJLiHH4RCJ5yDTqH+VlYPv2fwFs89JFw4c1IexYOcQUi4IQ==",
++      "cpu": [
++        "riscv64"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-linux-s390x": {
++      "version": "1.3.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-s390x/-/sharp-libvips-linux-s390x-1.3.3.tgz",
++      "integrity": "sha512-neWLh+3yCNThxnfy3c4BbVBeGgt9aftno+XbT56iK28RgeDs3UOFWviLWlUu0bArYVYJaFDK+RRohbicUNCm8Q==",
++      "cpu": [
++        "s390x"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-linux-x64": {
++      "version": "1.3.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.3.3.tgz",
++      "integrity": "sha512-4vKmvAst9nrowcqquKFAyZJUDolUaIp8uRiN0mWFguJ1IplC9/pitXtlnnlU4aa/eJw3J7i67V+pwUL+wZGdsA==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-linuxmusl-arm64": {
++      "version": "1.3.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-arm64/-/sharp-libvips-linuxmusl-arm64-1.3.3.tgz",
++      "integrity": "sha512-Y9kQaLMuNoB0bPYOOdcZMaseNrFpPodIWWMrx+CZyydf2xn68j9WYc6sWWRrDwNkzCQjKYfc68L7jKjGlHMibw==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-linuxmusl-x64": {
++      "version": "1.3.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-x64/-/sharp-libvips-linuxmusl-x64-1.3.3.tgz",
++      "integrity": "sha512-fj8Mv0HHfD1Rr+4I68+3agJynxDWtBFgicTbSOb9Bke6pIwzGcJ+RX/yHjmiEGFMCavY/dxvem7MyNaJF+wDiw==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-linux-arm": {
++      "version": "0.35.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linux-arm/-/sharp-linux-arm-0.35.4.tgz",
++      "integrity": "sha512-7OAS8gI0EReKGVN2HssHlM6umJgxF5VI3xN0p9FA91p/YO+ou5hiNghLdZ5BEHztwaaK5+bLKRf8x/o2L2nk9A==",
++      "cpu": [
++        "arm"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-linux-arm": "1.3.3"
++      }
++    },
++    "node_modules/@img/sharp-linux-arm64": {
++      "version": "0.35.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linux-arm64/-/sharp-linux-arm64-0.35.4.tgz",
++      "integrity": "sha512-De4jpEnAU8Hd5oT0j1G3uL4ZvTuipVMn7YC6vPaJhy6/7EwEae0SVAoBrUMYQbkLGDm85taVWwuPc1a44LTzCQ==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-linux-arm64": "1.3.3"
++      }
++    },
++    "node_modules/@img/sharp-linux-ppc64": {
++      "version": "0.35.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linux-ppc64/-/sharp-linux-ppc64-0.35.4.tgz",
++      "integrity": "sha512-2oYZJeIl4kCcMGk4ouZVjnkCtFrpQFlNEtJ6GbxzhHQchwH0NH/qEb9ykmOl29dqwMq+JhFdZn+1ak2FKhI9fQ==",
++      "cpu": [
++        "ppc64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-linux-ppc64": "1.3.3"
++      }
++    },
++    "node_modules/@img/sharp-linux-riscv64": {
++      "version": "0.35.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linux-riscv64/-/sharp-linux-riscv64-0.35.4.tgz",
++      "integrity": "sha512-cPbNChoRURAWdebDIHSenxRpgEdy7JkPydSnUxRm9VvKD7m0/xVaR/8Fzlu81pk5nHEvHH87UZUA7cTtwnbJSA==",
++      "cpu": [
++        "riscv64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-linux-riscv64": "1.3.3"
++      }
++    },
++    "node_modules/@img/sharp-linux-s390x": {
++      "version": "0.35.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linux-s390x/-/sharp-linux-s390x-0.35.4.tgz",
++      "integrity": "sha512-RY0JFY8Fd6RonCBtHz+DvadaPkXDSI1AUn6yWL9TipqkZ1vY8w8evqdgyDFnkm4/K1ve1TvZiaePP5oSd4+WVQ==",
++      "cpu": [
++        "s390x"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-linux-s390x": "1.3.3"
++      }
++    },
++    "node_modules/@img/sharp-linux-x64": {
++      "version": "0.35.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linux-x64/-/sharp-linux-x64-0.35.4.tgz",
++      "integrity": "sha512-9qvvEAuk8k89TfWUoX2htWjbAMX8p+NxCppjpcg5k6xMsjhBQPTsoIh36h9Qde4WRuGpJeYnOjdosDn/cnv+OA==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-linux-x64": "1.3.3"
++      }
++    },
++    "node_modules/@img/sharp-linuxmusl-arm64": {
++      "version": "0.35.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linuxmusl-arm64/-/sharp-linuxmusl-arm64-0.35.4.tgz",
++      "integrity": "sha512-KB5jxpfWQTr0nc3xdHtWChdbifHrBGsd2SM62Eyxrl8afikm+f5qGBU75SJIZBT/S1MC8XyacdlXBMSWq6OURA==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-linuxmusl-arm64": "1.3.3"
++      }
++    },
++    "node_modules/@img/sharp-linuxmusl-x64": {
++      "version": "0.35.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linuxmusl-x64/-/sharp-linuxmusl-x64-0.35.4.tgz",
++      "integrity": "sha512-f+eZJZIQNEEd26RPSW+76chwOf1XtA2Y/O+5ocVyLliHkeih3e+jhLVBdNTd2rS3IbNXK8+ug93Vf5ZXtF5Lxg==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-linuxmusl-x64": "1.3.3"
++      }
++    },
++    "node_modules/@img/sharp-wasm32": {
++      "version": "0.35.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-wasm32/-/sharp-wasm32-0.35.4.tgz",
++      "integrity": "sha512-zQnl4Kwp7Q6NHsENtU2T/00Zi+w3AQNwz3+UaTyVBy2FpXrzXzGjndpK61onhZjRtRpQXxCTeqw19bVyXOh7jA==",
++      "dev": true,
++      "license": "Apache-2.0 AND LGPL-3.0-or-later AND MIT",
++      "optional": true,
++      "dependencies": {
++        "@emnapi/runtime": "^1.11.3"
++      },
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-webcontainers-wasm32": {
++      "version": "0.35.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-webcontainers-wasm32/-/sharp-webcontainers-wasm32-0.35.4.tgz",
++      "integrity": "sha512-ESfNkywmCfPNyaZjxooddJQiQ+l/nTpGEOGthxiLnIHXC/CmcBixnfwUleX9mCz9ovrUUvKMap/pm8RYbzfwaA==",
++      "cpu": [
++        "wasm32"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "dependencies": {
++        "@img/sharp-wasm32": "0.35.4"
++      },
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-win32-arm64": {
++      "version": "0.35.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-win32-arm64/-/sharp-win32-arm64-0.35.4.tgz",
++      "integrity": "sha512-iNdlBX9gLVvqe2I3uIJSIKTq6wckP/DYxZtcqxm09x5Gi24DnFBmPAWZmr60ZyYMG0xlzo6goG3670ar+RXvRw==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0 AND LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-win32-ia32": {
++      "version": "0.35.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-win32-ia32/-/sharp-win32-ia32-0.35.4.tgz",
++      "integrity": "sha512-kqRsbaa5CS6KHlpxnN7WhE6vAAugXyZButpRdvDWetlv6Qv4N9WTcrWzF7tXfB9T7MsoadqdI8hmwLq6UlLvtw==",
++      "cpu": [
++        "ia32"
++      ],
++      "dev": true,
++      "license": "Apache-2.0 AND LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": "^20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-win32-x64": {
++      "version": "0.35.4",
++      "resolved": "https://registry.npmjs.org/@img/sharp-win32-x64/-/sharp-win32-x64-0.35.4.tgz",
++      "integrity": "sha512-XtmnYhBcrORsJ4XJngyzr/EWP0hRZLAZRFaApdKuviyqF78+ylxh2y06ZmtULAMOnObJ3ucpN0AcwSWnMowTRg==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0 AND LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@jridgewell/resolve-uri": {
++      "version": "3.1.2",
++      "resolved": "https://registry.npmjs.org/@jridgewell/resolve-uri/-/resolve-uri-3.1.2.tgz",
++      "integrity": "sha512-bRISgCIjP20/tbWSPWMEi54QVPRZExkuD9lJL+UIxUKtwVJA8wW1Trb1jMs1RFXo1CBTNZ/5hpC9QvmKWdopKw==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=6.0.0"
++      }
++    },
++    "node_modules/@jridgewell/sourcemap-codec": {
++      "version": "1.6.0",
++      "resolved": "https://registry.npmjs.org/@jridgewell/sourcemap-codec/-/sourcemap-codec-1.6.0.tgz",
++      "integrity": "sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw==",
++      "dev": true,
++      "license": "MIT"
++    },
++    "node_modules/@jridgewell/trace-mapping": {
++      "version": "0.3.9",
++      "resolved": "https://registry.npmjs.org/@jridgewell/trace-mapping/-/trace-mapping-0.3.9.tgz",
++      "integrity": "sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@jridgewell/resolve-uri": "^3.0.3",
++        "@jridgewell/sourcemap-codec": "^1.4.10"
++      }
++    },
++    "node_modules/@poppinss/colors": {
++      "version": "4.1.6",
++      "resolved": "https://registry.npmjs.org/@poppinss/colors/-/colors-4.1.6.tgz",
++      "integrity": "sha512-H9xkIdFswbS8n1d6vmRd8+c10t2Qe+rZITbbDHHkQixH5+2x1FDGmi/0K+WgWiqQFKPSlIYB7jlH6Kpfn6Fleg==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "kleur": "^4.1.5"
++      }
++    },
++    "node_modules/@poppinss/dumper": {
++      "version": "0.6.5",
++      "resolved": "https://registry.npmjs.org/@poppinss/dumper/-/dumper-0.6.5.tgz",
++      "integrity": "sha512-NBdYIb90J7LfOI32dOewKI1r7wnkiH6m920puQ3qHUeZkxNkQiFnXVWoE6YtFSv6QOiPPf7ys6i+HWWecDz7sw==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@poppinss/colors": "^4.1.5",
++        "@sindresorhus/is": "^7.0.2",
++        "supports-color": "^10.0.0"
++      }
++    },
++    "node_modules/@poppinss/exception": {
++      "version": "1.2.3",
++      "resolved": "https://registry.npmjs.org/@poppinss/exception/-/exception-1.2.3.tgz",
++      "integrity": "sha512-dCED+QRChTVatE9ibtoaxc+WkdzOSjYTKi/+uacHWIsfodVfpsueo3+DKpgU5Px8qXjgmXkSvhXvSCz3fnP9lw==",
++      "dev": true,
++      "license": "MIT"
++    },
++    "node_modules/@sindresorhus/is": {
++      "version": "7.2.0",
++      "resolved": "https://registry.npmjs.org/@sindresorhus/is/-/is-7.2.0.tgz",
++      "integrity": "sha512-P1Cz1dWaFfR4IR+U13mqqiGsLFf1KbayybWwdd2vfctdV6hDpUkgCY0nKOLLTMSoRd/jJNjtbqzf13K8DCCXQw==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=18"
++      },
++      "funding": {
++        "url": "https://github.com/sindresorhus/is?sponsor=1"
++      }
++    },
++    "node_modules/@speed-highlight/core": {
++      "version": "1.2.24",
++      "resolved": "https://registry.npmjs.org/@speed-highlight/core/-/core-1.2.24.tgz",
++      "integrity": "sha512-qeW2e1l78afw8VhRPfPQ1Gjj+KU5XFQ/OFV5ti6eTa9bruO7mJyZtA4vw0ofqmA3tKCkROE9xLk3VZoeRc98nw==",
++      "dev": true,
++      "license": "CC0-1.0"
++    },
++    "node_modules/blake3-wasm": {
++      "version": "2.1.5",
++      "resolved": "https://registry.npmjs.org/blake3-wasm/-/blake3-wasm-2.1.5.tgz",
++      "integrity": "sha512-F1+K8EbfOZE49dtoPtmxUQrpXaBIl3ICvasLh+nJta0xkz+9kF/7uet9fLnwKqhDrmj6g+6K3Tw9yQPUg2ka5g==",
++      "dev": true,
++      "license": "MIT"
++    },
++    "node_modules/cookie": {
++      "version": "1.1.1",
++      "resolved": "https://registry.npmjs.org/cookie/-/cookie-1.1.1.tgz",
++      "integrity": "sha512-ei8Aos7ja0weRpFzJnEA9UHJ/7XQmqglbRwnf2ATjcB9Wq874VKH9kfjjirM6UhU2/E5fFYadylyhFldcqSidQ==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=18"
++      },
++      "funding": {
++        "type": "opencollective",
++        "url": "https://opencollective.com/express"
++      }
++    },
++    "node_modules/detect-libc": {
++      "version": "2.1.2",
++      "resolved": "https://registry.npmjs.org/detect-libc/-/detect-libc-2.1.2.tgz",
++      "integrity": "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==",
++      "dev": true,
++      "license": "Apache-2.0",
++      "engines": {
++        "node": ">=8"
++      }
++    },
++    "node_modules/error-stack-parser-es": {
++      "version": "1.0.5",
++      "resolved": "https://registry.npmjs.org/error-stack-parser-es/-/error-stack-parser-es-1.0.5.tgz",
++      "integrity": "sha512-5qucVt2XcuGMcEGgWI7i+yZpmpByQ8J1lHhcL7PwqCwu9FPP3VUXzT4ltHe5i2z9dePwEHcDVOAfSnHsOlCXRA==",
++      "dev": true,
++      "license": "MIT",
++      "funding": {
++        "url": "https://github.com/sponsors/antfu"
++      }
++    },
++    "node_modules/esbuild": {
++      "version": "0.28.1",
++      "resolved": "https://registry.npmjs.org/esbuild/-/esbuild-0.28.1.tgz",
++      "integrity": "sha512-HrJrvZv5ayxBzPfwphOoNzkzOIIlifzk0KJrGK2c8R4+LKpMtpYLQeUdjnwjWv/LZlkH2laZk+4w78pi99D4Vw==",
++      "dev": true,
++      "hasInstallScript": true,
++      "license": "MIT",
++      "bin": {
++        "esbuild": "bin/esbuild"
++      },
++      "engines": {
++        "node": ">=18"
++      },
++      "optionalDependencies": {
++        "@esbuild/aix-ppc64": "0.28.1",
++        "@esbuild/android-arm": "0.28.1",
++        "@esbuild/android-arm64": "0.28.1",
++        "@esbuild/android-x64": "0.28.1",
++        "@esbuild/darwin-arm64": "0.28.1",
++        "@esbuild/darwin-x64": "0.28.1",
++        "@esbuild/freebsd-arm64": "0.28.1",
++        "@esbuild/freebsd-x64": "0.28.1",
++        "@esbuild/linux-arm": "0.28.1",
++        "@esbuild/linux-arm64": "0.28.1",
++        "@esbuild/linux-ia32": "0.28.1",
++        "@esbuild/linux-loong64": "0.28.1",
++        "@esbuild/linux-mips64el": "0.28.1",
++        "@esbuild/linux-ppc64": "0.28.1",
++        "@esbuild/linux-riscv64": "0.28.1",
++        "@esbuild/linux-s390x": "0.28.1",
++        "@esbuild/linux-x64": "0.28.1",
++        "@esbuild/netbsd-arm64": "0.28.1",
++        "@esbuild/netbsd-x64": "0.28.1",
++        "@esbuild/openbsd-arm64": "0.28.1",
++        "@esbuild/openbsd-x64": "0.28.1",
++        "@esbuild/openharmony-arm64": "0.28.1",
++        "@esbuild/sunos-x64": "0.28.1",
++        "@esbuild/win32-arm64": "0.28.1",
++        "@esbuild/win32-ia32": "0.28.1",
++        "@esbuild/win32-x64": "0.28.1"
++      }
++    },
++    "node_modules/fsevents": {
++      "version": "2.3.3",
++      "resolved": "https://registry.npmjs.org/fsevents/-/fsevents-2.3.3.tgz",
++      "integrity": "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==",
++      "dev": true,
++      "hasInstallScript": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "engines": {
++        "node": "^8.16.0 || ^10.6.0 || >=11.0.0"
++      }
++    },
++    "node_modules/kleur": {
++      "version": "4.1.5",
++      "resolved": "https://registry.npmjs.org/kleur/-/kleur-4.1.5.tgz",
++      "integrity": "sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=6"
++      }
++    },
++    "node_modules/miniflare": {
++      "version": "5.20261001.0-alpha",
++      "resolved": "https://registry.npmjs.org/miniflare/-/miniflare-5.20261001.0-alpha.tgz",
++      "integrity": "sha512-GaimS5mSIOMyvd16ga+e1/QkI8cmp3z35QPHFex0DktqNQf2RVZQwMPQXdyoUreUiFP/0Gpe2MoQInTyMAD5xA==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@cspotcode/source-map-support": "0.8.1",
++        "sharp": "0.35.4",
++        "undici": "7.29.1",
++        "workerd": "1.20261001.1",
++        "ws": "8.21.0",
++        "youch": "4.1.0-beta.10"
++      },
++      "engines": {
++        "node": ">=22.0.0"
++      }
++    },
++    "node_modules/path-to-regexp": {
++      "version": "6.3.0",
++      "resolved": "https://registry.npmjs.org/path-to-regexp/-/path-to-regexp-6.3.0.tgz",
++      "integrity": "sha512-Yhpw4T9C6hPpgPeA28us07OJeqZ5EzQTkbfwuhsUg0c237RomFoETJgmp2sa3F/41gfLE6G5cqcYwznmeEeOlQ==",
++      "dev": true,
++      "license": "MIT"
++    },
++    "node_modules/pathe": {
++      "version": "2.0.3",
++      "resolved": "https://registry.npmjs.org/pathe/-/pathe-2.0.3.tgz",
++      "integrity": "sha512-WUjGcAqP1gQacoQe+OBJsFA7Ld4DyXuUIjZ5cc75cLHvJ7dtNsTugphxIADwspS+AraAUePCKrSVtPLFj/F88w==",
++      "dev": true,
++      "license": "MIT"
++    },
++    "node_modules/semver": {
++      "version": "7.8.5",
++      "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.5.tgz",
++      "integrity": "sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==",
++      "dev": true,
++      "license": "ISC",
++      "bin": {
++        "semver": "bin/semver.js"
++      },
++      "engines": {
++        "node": ">=10"
++      }
++    },
++    "node_modules/sharp": {
++      "version": "0.35.4",
++      "resolved": "https://registry.npmjs.org/sharp/-/sharp-0.35.4.tgz",
++      "integrity": "sha512-n++8XWcj+jCOr2IOl7h8LbKnGBDY4aPbmprMONBNFdn0ImXqpGVv5zliDs0V9HbmbCQLpbuo2ej9rAoOQTvMDA==",
++      "dev": true,
++      "license": "Apache-2.0",
++      "dependencies": {
++        "@img/colour": "^1.1.0",
++        "detect-libc": "^2.1.2",
++        "semver": "^7.8.5"
++      },
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-darwin-arm64": "0.35.4",
++        "@img/sharp-darwin-x64": "0.35.4",
++        "@img/sharp-freebsd-wasm32": "0.35.4",
++        "@img/sharp-libvips-darwin-arm64": "1.3.3",
++        "@img/sharp-libvips-darwin-x64": "1.3.3",
++        "@img/sharp-libvips-linux-arm": "1.3.3",
++        "@img/sharp-libvips-linux-arm64": "1.3.3",
++        "@img/sharp-libvips-linux-ppc64": "1.3.3",
++        "@img/sharp-libvips-linux-riscv64": "1.3.3",
++        "@img/sharp-libvips-linux-s390x": "1.3.3",
++        "@img/sharp-libvips-linux-x64": "1.3.3",
++        "@img/sharp-libvips-linuxmusl-arm64": "1.3.3",
++        "@img/sharp-libvips-linuxmusl-x64": "1.3.3",
++        "@img/sharp-linux-arm": "0.35.4",
++        "@img/sharp-linux-arm64": "0.35.4",
++        "@img/sharp-linux-ppc64": "0.35.4",
++        "@img/sharp-linux-riscv64": "0.35.4",
++        "@img/sharp-linux-s390x": "0.35.4",
++        "@img/sharp-linux-x64": "0.35.4",
++        "@img/sharp-linuxmusl-arm64": "0.35.4",
++        "@img/sharp-linuxmusl-x64": "0.35.4",
++        "@img/sharp-webcontainers-wasm32": "0.35.4",
++        "@img/sharp-win32-arm64": "0.35.4",
++        "@img/sharp-win32-ia32": "0.35.4",
++        "@img/sharp-win32-x64": "0.35.4"
++      },
++      "peerDependenciesMeta": {
++        "@types/node": {
++          "optional": true
++        }
++      }
++    },
++    "node_modules/supports-color": {
++      "version": "10.2.2",
++      "resolved": "https://registry.npmjs.org/supports-color/-/supports-color-10.2.2.tgz",
++      "integrity": "sha512-SS+jx45GF1QjgEXQx4NJZV9ImqmO2NPz5FNsIHrsDjh2YsHnawpan7SNQ1o8NuhrbHZy9AZhIoCUiCeaW/C80g==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=18"
++      },
++      "funding": {
++        "url": "https://github.com/chalk/supports-color?sponsor=1"
++      }
++    },
++    "node_modules/tslib": {
++      "version": "2.8.1",
++      "resolved": "https://registry.npmjs.org/tslib/-/tslib-2.8.1.tgz",
++      "integrity": "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==",
++      "dev": true,
++      "license": "0BSD",
++      "optional": true
++    },
++    "node_modules/undici": {
++      "version": "7.29.1",
++      "resolved": "https://registry.npmjs.org/undici/-/undici-7.29.1.tgz",
++      "integrity": "sha512-RYONW2MeafgYlkVOKYKkA/Ag7BmXqgIWCa8t1m0JcxrQg9pI9lEqRhAOruOBCbAohOa/gkCF+iPi9hrgvTzu6Q==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=20.18.1"
++      }
++    },
++    "node_modules/unenv": {
++      "version": "2.0.0-rc.24",
++      "resolved": "https://registry.npmjs.org/unenv/-/unenv-2.0.0-rc.24.tgz",
++      "integrity": "sha512-i7qRCmY42zmCwnYlh9H2SvLEypEFGye5iRmEMKjcGi7zk9UquigRjFtTLz0TYqr0ZGLZhaMHl/foy1bZR+Cwlw==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "pathe": "^2.0.3"
++      }
++    },
++    "node_modules/workerd": {
++      "version": "1.20261001.1",
++      "resolved": "https://registry.npmjs.org/workerd/-/workerd-1.20261001.1.tgz",
++      "integrity": "sha512-d/SIYHFO0PT/wiFZg8in4NpRIxYuFwslX1HdylOtWkBIIUmSpkGFhK820cV84XACFylwJ48xuRoWW/8DWDPsPQ==",
++      "dev": true,
++      "hasInstallScript": true,
++      "license": "Apache-2.0",
++      "bin": {
++        "workerd": "bin/workerd"
++      },
++      "engines": {
++        "node": ">=16"
++      },
++      "optionalDependencies": {
++        "@cloudflare/workerd-darwin-64": "1.20261001.1",
++        "@cloudflare/workerd-darwin-arm64": "1.20261001.1",
++        "@cloudflare/workerd-linux-64": "1.20261001.1",
++        "@cloudflare/workerd-linux-arm64": "1.20261001.1",
++        "@cloudflare/workerd-windows-64": "1.20261001.1"
++      }
++    },
++    "node_modules/wrangler": {
++      "version": "4.147.0",
++      "resolved": "https://registry.npmjs.org/wrangler/-/wrangler-4.147.0.tgz",
++      "integrity": "sha512-pQYRoiq8PTAxphaG69z8+GC1DkSGd19EDZehQ8zxjo/Ko3mRB6Qs1mTrd8ZuKAarLklIjTqr1lUdCK9r4q2hUg==",
++      "dev": true,
++      "license": "MIT OR Apache-2.0",
++      "dependencies": {
++        "@cloudflare/kv-asset-handler": "0.5.0",
++        "@cloudflare/unenv-preset": "2.16.2",
++        "blake3-wasm": "2.1.5",
++        "esbuild": "0.28.1",
++        "miniflare": "5.20261001.0-alpha",
++        "path-to-regexp": "6.3.0",
++        "unenv": "2.0.0-rc.24",
++        "workerd": "1.20261001.1"
++      },
++      "bin": {
++        "cf-wrangler": "bin/cf-wrangler.js",
++        "wrangler": "bin/wrangler.js",
++        "wrangler2": "bin/wrangler.js"
++      },
++      "engines": {
++        "node": ">=22.0.0"
++      },
++      "optionalDependencies": {
++        "fsevents": "2.3.3"
++      },
++      "peerDependencies": {
++        "@cloudflare/workers-types": "^5.20261001.1"
++      },
++      "peerDependenciesMeta": {
++        "@cloudflare/workers-types": {
++          "optional": true
++        }
++      }
++    },
++    "node_modules/ws": {
++      "version": "8.21.0",
++      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.0.tgz",
++      "integrity": "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=10.0.0"
++      },
++      "peerDependencies": {
++        "bufferutil": "^4.0.1",
++        "utf-8-validate": ">=5.0.2"
++      },
++      "peerDependenciesMeta": {
++        "bufferutil": {
++          "optional": true
++        },
++        "utf-8-validate": {
++          "optional": true
++        }
++      }
++    },
++    "node_modules/youch": {
++      "version": "4.1.0-beta.10",
++      "resolved": "https://registry.npmjs.org/youch/-/youch-4.1.0-beta.10.tgz",
++      "integrity": "sha512-rLfVLB4FgQneDr0dv1oddCVZmKjcJ6yX6mS4pU82Mq/Dt9a3cLZQ62pDBL4AUO+uVrCvtWz3ZFUL2HFAFJ/BXQ==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@poppinss/colors": "^4.1.5",
++        "@poppinss/dumper": "^0.6.4",
++        "@speed-highlight/core": "^1.2.7",
++        "cookie": "^1.0.2",
++        "youch-core": "^0.3.3"
++      }
++    },
++    "node_modules/youch-core": {
++      "version": "0.3.3",
++      "resolved": "https://registry.npmjs.org/youch-core/-/youch-core-0.3.3.tgz",
++      "integrity": "sha512-ho7XuGjLaJ2hWHoK8yFnsUGy2Y5uDpqSTq1FkHLK4/oqKtyUU1AFbOOxY4IpC9f0fTLjwYbslUz0Po5BpD1wrA==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@poppinss/exception": "^1.2.2",
++        "error-stack-parser-es": "^1.0.5"
++      }
++    }
++  }
++}
+diff --git a/remote/relay/package.json b/remote/relay/package.json
+new file mode 100644
+index 0000000..0a431fa
+--- /dev/null
++++ b/remote/relay/package.json
+@@ -0,0 +1,11 @@
++{
++  "name": "drawpen-relay",
++  "private": true,
++  "scripts": {
++    "deploy": "wrangler deploy",
++    "dev": "wrangler dev"
++  },
++  "devDependencies": {
++    "wrangler": "^4.0.0"
++  }
++}
+diff --git a/remote/relay/public/index.html b/remote/relay/public/index.html
+new file mode 100644
+index 0000000..d7b3cb2
+--- /dev/null
++++ b/remote/relay/public/index.html
+@@ -0,0 +1,589 @@
++<!doctype html>
++<html lang="en">
++<head>
++<meta charset="utf-8">
++<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
++<meta name="apple-mobile-web-app-capable" content="yes">
++<meta name="mobile-web-app-capable" content="yes">
++<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
++<meta name="apple-mobile-web-app-title" content="DrawPen">
++<title>DrawPen Remote</title>
++<style>
++  :root {
++    --bg: #111214;
++    --bar: #1c1d21;
++    --btn: #2a2c31;
++    --btn-on: #529BE0;
++    --text: #e8e8ea;
++    --muted: #8a8c93;
++  }
++  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
++  html, body {
++    margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
++    font: 13px -apple-system, system-ui, sans-serif;
++    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
++    overscroll-behavior: none; touch-action: manipulation;
++  }
++  #app { display: flex; height: 100%; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
++  #bar {
++    width: 116px; flex: none; background: var(--bar); overflow-y: auto; touch-action: pan-y;
++    display: grid; grid-template-columns: 48px 48px; gap: 6px; justify-content: center; align-content: start; padding: 8px 0;
++  }
++  #bar > div:not(#status) { display: contents; }
++  #bar hr { grid-column: 1 / -1; width: 100%; border: 0; border-top: 1px solid #333; margin: 2px 0; }
++  #bar button {
++    width: 48px; height: 44px; flex: none; border: 0; border-radius: 10px; background: var(--btn); color: var(--text);
++    font: 600 18px -apple-system, system-ui, sans-serif; display: grid; place-items: center; padding: 0;
++  }
++  #bar button small { font-size: 9px; font-weight: 500; display: block; color: var(--muted); margin-top: -2px; }
++  #bar button.on { background: var(--btn-on); }
++  #bar button.on small { color: var(--text); }
++  #bar button:disabled { opacity: .35; }
++  .swatch { width: 36px !important; height: 36px !important; border-radius: 50% !important; border: 3px solid var(--bar) !important; box-shadow: 0 0 0 1px #555; justify-self: center; align-self: center; }
++  .swatch.on { box-shadow: 0 0 0 2px var(--text); }
++  .swatch.rainbow { background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red) !important; }
++  .dot { border-radius: 50%; background: var(--text); display: block; }
++  #status { grid-column: 1 / -1; justify-self: center; width: 12px; height: 12px; border-radius: 50%; background: #E05252; margin: 2px 0; }
++  #status.waiting { background: #E0A552; }
++  #status.ok { background: #52E06C; }
++  #stage { position: relative; flex: 1; overflow: hidden; touch-action: none; }
++  #stage canvas { position: absolute; }
++  #shot { background: #000; }
++  #ink { touch-action: none; }
++  #msg {
++    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
++    font-size: 16px; pointer-events: none; padding: 24px;
++  }
++  #msg span { background: rgba(0, 0, 0, .75); color: var(--text); padding: 10px 16px; border-radius: 10px; }
++</style>
++</head>
++<body>
++<div id="app">
++  <div id="bar">
++    <div id="status" title="Connection"></div>
++    <div id="tools"></div>
++    <hr>
++    <div id="colors"></div>
++    <hr>
++    <div id="widths"></div>
++    <hr>
++    <button id="undo" title="Undo">↶</button>
++    <button id="redo" title="Redo">↷</button>
++    <button id="clear" title="Clear all">✕<small>clear</small></button>
++    <hr>
++    <button id="overlay" title="Show/hide overlay on PC">◐<small>overlay</small></button>
++    <button id="board" title="Toggle whiteboard">▢<small>board</small></button>
++    <button id="finger" title="Allow finger drawing">☝<small>finger</small></button>
++    <button id="refresh" title="Refresh screen image">⟳</button>
++  </div>
++  <div id="stage">
++    <canvas id="shot"></canvas>
++    <canvas id="ink"></canvas>
++    <div id="msg"><span>Connecting…</span></div>
++  </div>
++</div>
++
++<script>
++'use strict';
++
++// Must match DrawPen constants.js (widthList, highlighterAlpha)
++const WIDTHS = {
++  pen:         [4, 8, 12, 16],
++  highlighter: [8, 16, 24, 32],
++  figure:      [4, 6, 8, 10],
++  laser:       [5, 8, 12, 16],
++};
++const HIGHLIGHTER_ALPHA = 0.35;
++const LOCAL_FADE_MS = 1500;          // fadepen / laser local preview lifetime
++const LOCAL_STALE_MS = 8000;         // drop local ink if no frame confirms it
++const PING_MS = 20000;
++
++const TOOLS = [
++  { id: 'pen',         icon: '✎', label: 'pen' },
++  { id: 'fadepen',     icon: '✎', label: 'fade' },
++  { id: 'highlighter', icon: '▌', label: 'high' },
++  { id: 'laser',       icon: '✦', label: 'laser' },
++  { id: 'arrow',       icon: '→', label: 'arrow' },
++  { id: 'line',        icon: '╱', label: 'line' },
++  { id: 'rectangle',   icon: '▭', label: 'rect' },
++  { id: 'oval',        icon: '◯', label: 'oval' },
++  { id: 'eraser',      icon: '⌫', label: 'erase' },
++];
++
++const $ = (id) => document.getElementById(id);
++const room = new URLSearchParams(location.hash.slice(1)).get('room') || '';
++
++// ---- State ----
++const saved = load();
++const state = {
++  tool: TOOLS.some(t => t.id === saved.tool) ? saved.tool : 'pen',
++  color: Number.isInteger(saved.color) ? saved.color : 1,
++  width: Number.isInteger(saved.width) ? saved.width : 1,
++  finger: Boolean(saved.finger),
++  colors: ['#000000', '#529BE0', '#E05252', '#52E06C', '#E0A552', '#FFFFFF', '#1E1E1E'],
++  hostW: 16, hostH: 9,
++  hostOnline: false,
++  overlay: true,
++};
++
++function load() {
++  try { return JSON.parse(localStorage.getItem('drawpen-remote') || '{}'); } catch (_) { return {}; }
++}
++function save() {
++  try {
++    localStorage.setItem('drawpen-remote', JSON.stringify({ tool: state.tool, color: state.color, width: state.width, finger: state.finger }));
++  } catch (_) {}
++}
++
++// ---- Connection ----
++let ws = null;
++let retryMs = 1000;
++let pendingFrame = null;
++
++function connect() {
++  if (!/^[a-f0-9]{32}$/.test(room)) {
++    setMessage('No pairing code. Scan the QR code shown by DrawPen on the PC.');
++    return;
++  }
++
++  const url = `${location.protocol === 'http:' ? 'ws' : 'wss'}://${location.host}/ws?room=${room}&role=pad`;
++  const socket = new WebSocket(url);
++  socket.binaryType = 'arraybuffer';
++  ws = socket;
++  setStatus();
++
++  socket.onopen = () => {
++    retryMs = 1000;
++    setStatus();
++  };
++
++  socket.onmessage = (event) => {
++    if (typeof event.data !== 'string') {
++      handleFrame(event.data);
++      return;
++    }
++    if (event.data === 'pong') return;
++
++    let message;
++    try { message = JSON.parse(event.data); } catch (_) { return; }
++    handleMessage(message);
++  };
++
++  socket.onclose = () => {
++    if (ws !== socket) return;
++    ws = null;
++    state.hostOnline = false;
++    setStatus();
++    setTimeout(connect, retryMs);
++    retryMs = Math.min(retryMs * 2, 15000);
++  };
++}
++
++function send(message) {
++  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
++}
++
++setInterval(() => ws && ws.readyState === WebSocket.OPEN && ws.send('ping'), PING_MS);
++
++function handleMessage(message) {
++  switch (message.t) {
++    case 'peer':
++      if (message.role !== 'host') return;
++      state.hostOnline = Boolean(message.connected);
++      setStatus();
++      if (state.hostOnline) send({ t: 'hi' });
++      break;
++    case 'hello':
++      state.hostOnline = true;
++      if (Array.isArray(message.colors)) state.colors = ['#000000', ...message.colors];
++      if (typeof message.overlay === 'boolean') state.overlay = message.overlay;
++      setHostSize(message.w, message.h);
++      sendToolState();
++      renderBar();
++      setStatus();
++      break;
++    case 'overlay_state':
++      state.overlay = Boolean(message.visible);
++      renderBar();
++      break;
++    case 'frame':
++      pendingFrame = message;
++      break;
++  }
++}
++
++function sendToolState() {
++  send({ t: 'tool', tool: state.tool });
++  send({ t: 'color', index: state.color });
++  send({ t: 'width', index: state.width });
++}
++
++async function handleFrame(data) {
++  const meta = pendingFrame;
++  pendingFrame = null;
++  if (!meta) return;
++
++  let bitmap;
++  try {
++    bitmap = await createImageBitmap(new Blob([data], { type: 'image/jpeg' }));
++  } catch (_) {
++    return;
++  }
++
++  setHostSize(meta.w, meta.h);
++  const ctx = shot.getContext('2d');
++  ctx.drawImage(bitmap, 0, 0, shot.width, shot.height);
++  bitmap.close && bitmap.close();
++
++  // Strokes the PC has applied are now in the image
++  strokes = strokes.filter(s => !s.done || s.seq > meta.seq);
++  hasFrame = true;
++  setStatus();
++  drawInk();
++}
++
++function setStatus() {
++  const el = $('status');
++  if (!ws || ws.readyState !== WebSocket.OPEN) {
++    el.className = '';
++    setMessage(room ? 'Connecting to relay…' : '');
++  } else if (!state.hostOnline) {
++    el.className = 'waiting';
++    setMessage('PC is offline. Open DrawPen → iPad Remote → Connect.');
++  } else {
++    el.className = 'ok';
++    setMessage(hasFrame ? '' : 'Waiting for screen…');
++  }
++}
++
++function setMessage(text) {
++  $('msg').firstElementChild.textContent = text;
++  $('msg').style.display = text ? 'flex' : 'none';
++}
++
++// ---- Layout ----
++const stage = $('stage');
++const shot = $('shot');
++const ink = $('ink');
++let hasFrame = false;
++let fit = { x: 0, y: 0, w: 1, h: 1 };
++
++function setHostSize(w, h) {
++  if (!(w > 0 && h > 0)) return;
++  if (w === state.hostW && h === state.hostH) return;
++  state.hostW = w;
++  state.hostH = h;
++  layout();
++}
++
++function layout() {
++  const sw = stage.clientWidth;
++  const sh = stage.clientHeight;
++  const scale = Math.min(sw / state.hostW, sh / state.hostH);
++  const w = Math.floor(state.hostW * scale);
++  const h = Math.floor(state.hostH * scale);
++  fit = { x: Math.floor((sw - w) / 2), y: Math.floor((sh - h) / 2), w, h };
++
++  const dpr = window.devicePixelRatio || 1;
++  for (const canvas of [shot, ink]) {
++    canvas.style.left = fit.x + 'px';
++    canvas.style.top = fit.y + 'px';
++    canvas.style.width = w + 'px';
++    canvas.style.height = h + 'px';
++    canvas.width = Math.round(w * dpr);
++    canvas.height = Math.round(h * dpr);
++  }
++  hasFrame = false; // canvas was cleared; next frame repaints
++  send({ t: 'frame' });
++  setStatus();
++  drawInk();
++}
++
++window.addEventListener('resize', layout);
++
++// ---- Toolbar ----
++function button(html, title, onClick, extraClass = '') {
++  const el = document.createElement('button');
++  el.innerHTML = html;
++  el.title = title;
++  if (extraClass) el.className = extraClass;
++  el.addEventListener('click', onClick);
++  return el;
++}
++
++function renderBar() {
++  const tools = $('tools');
++  tools.replaceChildren(...TOOLS.map(tool => {
++    const el = button(`<span>${tool.icon}<small>${tool.label}</small></span>`, tool.id, () => setTool(tool.id));
++    el.classList.toggle('on', state.tool === tool.id);
++    return el;
++  }));
++
++  $('colors').replaceChildren(...state.colors.map((color, index) => {
++    const el = button('', index === 0 ? 'Rainbow' : color, () => setColor(index), 'swatch');
++    if (index === 0) el.classList.add('rainbow');
++    else el.style.background = color;
++    el.classList.toggle('on', state.color === index);
++    return el;
++  }));
++
++  $('widths').replaceChildren(...WIDTHS.pen.map((size, index) => {
++    const el = button(`<span class="dot" style="width:${size}px;height:${size}px"></span>`, `Width ${index + 1}`, () => setWidth(index));
++    el.classList.toggle('on', state.width === index);
++    return el;
++  }));
++
++  $('finger').classList.toggle('on', state.finger);
++  $('overlay').classList.toggle('on', state.overlay);
++}
++
++function setTool(tool) { state.tool = tool; save(); send({ t: 'tool', tool }); renderBar(); }
++function setColor(index) { state.color = index; save(); send({ t: 'color', index }); renderBar(); }
++function setWidth(index) { state.width = index; save(); send({ t: 'width', index }); renderBar(); }
++
++$('undo').addEventListener('click', () => send({ t: 'undo' }));
++$('redo').addEventListener('click', () => send({ t: 'redo' }));
++$('clear').addEventListener('click', () => {
++  if (confirm('Clear all drawings? This cannot be undone.')) {
++    strokes = [];
++    drawInk();
++    send({ t: 'clear' });
++  }
++});
++$('overlay').addEventListener('click', () => send({ t: 'overlay', visible: !state.overlay }));
++$('board').addEventListener('click', () => send({ t: 'whiteboard' }));
++$('finger').addEventListener('click', () => { state.finger = !state.finger; save(); renderBar(); });
++$('refresh').addEventListener('click', () => send({ t: 'frame' }));
++
++// ---- Input ----
++let strokes = [];
++let active = null;
++let pendingPoints = [];
++let flushScheduled = false;
++let seq = Date.now(); // monotonic across reloads; echoed back in frames
++
++function allowed(event) {
++  if (event.pointerType === 'pen' || event.pointerType === 'mouse') return true;
++  return state.finger;
++}
++
++function normalize(event) {
++  const rect = ink.getBoundingClientRect();
++  const x = Math.min(Math.max((event.clientX - rect.left) / rect.width, 0), 1);
++  const y = Math.min(Math.max((event.clientY - rect.top) / rect.height, 0), 1);
++  return [Math.round(x * 1e4) / 1e4, Math.round(y * 1e4) / 1e4];
++}
++
++ink.addEventListener('pointerdown', (event) => {
++  if (active || !allowed(event) || !state.hostOnline) return;
++  event.preventDefault();
++  ink.setPointerCapture(event.pointerId);
++
++  const point = normalize(event);
++  active = {
++    pointerId: event.pointerId,
++    seq: ++seq,
++    tool: state.tool,
++    color: state.color,
++    width: state.width,
++    points: [point],
++    done: false,
++    endedAt: 0,
++  };
++  strokes.push(active);
++  send({ t: 'down', p: point });
++  requestDraw();
++});
++
++ink.addEventListener('pointermove', (event) => {
++  if (!active || event.pointerId !== active.pointerId) return;
++  event.preventDefault();
++
++  const events = event.getCoalescedEvents ? event.getCoalescedEvents() : [event];
++  for (const e of (events.length ? events : [event])) {
++    const point = normalize(e);
++    active.points.push(point);
++    pendingPoints.push(point);
++  }
++  scheduleFlush();
++  requestDraw();
++});
++
++function endStroke(event) {
++  if (!active || event.pointerId !== active.pointerId) return;
++  event.preventDefault();
++
++  flushPoints();
++  const last = active.points[active.points.length - 1];
++  send({ t: 'up', p: last, seq: active.seq });
++  active.done = true;
++  active.endedAt = performance.now();
++  active = null;
++  requestDraw();
++}
++
++ink.addEventListener('pointerup', endStroke);
++ink.addEventListener('pointercancel', endStroke);
++
++function scheduleFlush() {
++  if (flushScheduled) return;
++  flushScheduled = true;
++  requestAnimationFrame(flushPoints);
++}
++
++function flushPoints() {
++  flushScheduled = false;
++  if (!pendingPoints.length) return;
++  send({ t: 'move', pts: pendingPoints });
++  pendingPoints = [];
++}
++
++// Block iOS gestures (scroll, zoom, magnifier) on the drawing surface
++for (const type of ['touchstart', 'touchmove', 'gesturestart', 'gesturechange']) {
++  ink.addEventListener(type, (event) => event.preventDefault(), { passive: false });
++}
++
++// ---- Local ink (preview until the next frame shows the real result) ----
++let drawRequested = false;
++
++function requestDraw() {
++  if (drawRequested) return;
++  drawRequested = true;
++  requestAnimationFrame(() => {
++    drawRequested = false;
++    drawInk();
++  });
++}
++
++function drawInk() {
++  const ctx = ink.getContext('2d');
++  const dpr = window.devicePixelRatio || 1;
++  const now = performance.now();
++  ctx.setTransform(1, 0, 0, 1, 0, 0);
++  ctx.clearRect(0, 0, ink.width, ink.height);
++  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
++
++  const scale = fit.w / state.hostW; // host px -> iPad css px
++  let animating = false;
++
++  strokes = strokes.filter(s => {
++    if (!s.done) return true;
++    const age = now - s.endedAt;
++    if (s.tool === 'laser' || s.tool === 'fadepen') return age < LOCAL_FADE_MS;
++    return age < LOCAL_STALE_MS;
++  });
++
++  for (const s of strokes) {
++    let alpha = 1;
++    if (s.done && (s.tool === 'laser' || s.tool === 'fadepen')) {
++      alpha = Math.max(0, 1 - (now - s.endedAt) / LOCAL_FADE_MS);
++      animating = true;
++    }
++    drawStroke(ctx, s, scale, alpha);
++  }
++
++  if (animating || strokes.some(s => s.done)) requestDraw();
++}
++
++function strokeColor(s, ctx) {
++  if (s.tool === 'laser') return '#ff3b30';
++  if (s.tool === 'eraser') return 'rgba(140,140,140,0.6)';
++  if (s.color === 0) {
++    const [a, b] = [s.points[0], s.points[s.points.length - 1]];
++    const g = ctx.createLinearGradient(a[0] * fit.w, a[1] * fit.h, b[0] * fit.w + 1, b[1] * fit.h + 1);
++    g.addColorStop(0, 'hsl(0,90%,60%)');
++    g.addColorStop(0.5, 'hsl(180,90%,60%)');
++    g.addColorStop(1, 'hsl(300,90%,60%)');
++    return g;
++  }
++  return state.colors[s.color] || '#ffffff';
++}
++
++function drawStroke(ctx, s, scale, alpha) {
++  const pts = s.points.map(([x, y]) => [x * fit.w, y * fit.h]);
++  ctx.save();
++  ctx.globalAlpha = alpha;
++  ctx.lineCap = 'round';
++  ctx.lineJoin = 'round';
++  ctx.strokeStyle = strokeColor(s, ctx);
++
++  switch (s.tool) {
++    case 'highlighter':
++      ctx.globalAlpha = alpha * HIGHLIGHTER_ALPHA;
++      ctx.lineWidth = WIDTHS.highlighter[s.width] * scale;
++      polyline(ctx, pts);
++      break;
++    case 'laser':
++      ctx.shadowColor = '#ff3b30';
++      ctx.shadowBlur = 8;
++      ctx.lineWidth = WIDTHS.laser[s.width] * scale;
++      polyline(ctx, pts);
++      break;
++    case 'eraser':
++      ctx.lineWidth = 6;
++      ctx.setLineDash([6, 6]);
++      polyline(ctx, pts);
++      break;
++    case 'arrow':
++    case 'line':
++    case 'rectangle':
++    case 'oval':
++      ctx.lineWidth = WIDTHS.figure[s.width] * scale;
++      shape(ctx, s.tool, pts[0], pts[pts.length - 1]);
++      break;
++    default: // pen, fadepen
++      ctx.lineWidth = WIDTHS.pen[s.width] * scale;
++      polyline(ctx, pts);
++  }
++  ctx.restore();
++}
++
++function polyline(ctx, pts) {
++  ctx.beginPath();
++  ctx.moveTo(pts[0][0], pts[0][1]);
++  if (pts.length === 1) {
++    ctx.lineTo(pts[0][0] + 0.01, pts[0][1]);
++  }
++  for (let i = 1; i < pts.length - 1; i++) {
++    const mx = (pts[i][0] + pts[i + 1][0]) / 2;
++    const my = (pts[i][1] + pts[i + 1][1]) / 2;
++    ctx.quadraticCurveTo(pts[i][0], pts[i][1], mx, my);
++  }
++  if (pts.length > 1) ctx.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]);
++  ctx.stroke();
++}
++
++function shape(ctx, tool, a, b) {
++  ctx.beginPath();
++  if (tool === 'rectangle') {
++    ctx.rect(Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1]));
++  } else if (tool === 'oval') {
++    ctx.ellipse((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, Math.abs(b[0] - a[0]) / 2, Math.abs(b[1] - a[1]) / 2, 0, 0, Math.PI * 2);
++  } else {
++    ctx.moveTo(a[0], a[1]);
++    ctx.lineTo(b[0], b[1]);
++    if (tool === 'arrow') {
++      const angle = Math.atan2(b[1] - a[1], b[0] - a[0]);
++      const head = Math.max(12, ctx.lineWidth * 3);
++      for (const side of [-1, 1]) {
++        ctx.moveTo(b[0], b[1]);
++        ctx.lineTo(b[0] - head * Math.cos(angle + side * Math.PI / 7), b[1] - head * Math.sin(angle + side * Math.PI / 7));
++      }
++    }
++  }
++  ctx.stroke();
++}
++
++// ---- Keep the iPad awake while presenting ----
++async function keepAwake() {
++  try { await navigator.wakeLock?.request('screen'); } catch (_) {}
++}
++document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && keepAwake());
++
++renderBar();
++layout();
++keepAwake();
++connect();
++</script>
++</body>
++</html>
+diff --git a/remote/relay/src/index.js b/remote/relay/src/index.js
+new file mode 100644
+index 0000000..e0aded3
+--- /dev/null
++++ b/remote/relay/src/index.js
+@@ -0,0 +1,91 @@
++// Relay between one DrawPen host (Windows) and one iPad per room.
++// Rooms are Durable Objects keyed by a 128-bit id from the pairing QR code.
++// Messages are forwarded as-is; the relay keeps no state beyond open sockets.
++
++import { DurableObject } from 'cloudflare:workers';
++
++const ROLES = ['host', 'pad'];
++const otherRole = (role) => (role === 'host' ? 'pad' : 'host');
++
++export class Room extends DurableObject {
++  constructor(ctx, env) {
++    super(ctx, env);
++    // Keepalive pings are answered without waking the object
++    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
++  }
++
++  async fetch(request) {
++    const role = new URL(request.url).searchParams.get('role');
++    if (!ROLES.includes(role)) {
++      return new Response('Invalid role', { status: 400 });
++    }
++
++    // One socket per role: a new connection replaces the old one
++    for (const old of this.ctx.getWebSockets(role)) {
++      try { old.close(4000, 'Replaced'); } catch (_) {}
++    }
++
++    const [client, server] = Object.values(new WebSocketPair());
++    this.ctx.acceptWebSocket(server, [role]);
++
++    const other = otherRole(role);
++    server.send(JSON.stringify({ t: 'peer', role: other, connected: this.openSockets(other).length > 0 }));
++    this.send(other, JSON.stringify({ t: 'peer', role, connected: true }));
++
++    return new Response(null, { status: 101, webSocket: client });
++  }
++
++  webSocketMessage(ws, message) {
++    const [role] = this.ctx.getTags(ws);
++    this.send(otherRole(role), message);
++  }
++
++  webSocketClose(ws, code) {
++    this.dropped(ws);
++    try { ws.close(code === 1005 ? 1000 : code, 'Closed'); } catch (_) {}
++  }
++
++  webSocketError(ws) {
++    this.dropped(ws);
++  }
++
++  dropped(ws) {
++    const [role] = this.ctx.getTags(ws);
++    const stillConnected = this.openSockets(role).some((socket) => socket !== ws);
++
++    if (!stillConnected) {
++      this.send(otherRole(role), JSON.stringify({ t: 'peer', role, connected: false }));
++    }
++  }
++
++  openSockets(role) {
++    return this.ctx.getWebSockets(role).filter((socket) => socket.readyState === WebSocket.OPEN);
++  }
++
++  send(role, message) {
++    for (const socket of this.openSockets(role)) {
++      try { socket.send(message); } catch (_) {}
++    }
++  }
++}
++
++export default {
++  async fetch(request, env) {
++    const url = new URL(request.url);
++
++    if (url.pathname === '/ws') {
++      if (request.headers.get('Upgrade') !== 'websocket') {
++        return new Response('Expected WebSocket', { status: 426 });
++      }
++
++      const room = url.searchParams.get('room') || '';
++      if (!/^[a-f0-9]{32}$/.test(room)) {
++        return new Response('Invalid room', { status: 400 });
++      }
++
++      return env.ROOMS.get(env.ROOMS.idFromName(room)).fetch(request);
++    }
++
++    return env.ASSETS.fetch(request);
++  },
++};
+diff --git a/remote/relay/wrangler.toml b/remote/relay/wrangler.toml
+new file mode 100644
+index 0000000..cedd7ea
+--- /dev/null
++++ b/remote/relay/wrangler.toml
+@@ -0,0 +1,15 @@
++name = "drawpen-relay"
++main = "src/index.js"
++compatibility_date = "2026-09-01"
++
++[assets]
++directory = "./public"
++binding = "ASSETS"
++
++[[durable_objects.bindings]]
++name = "ROOMS"
++class_name = "Room"
++
++[[migrations]]
++tag = "v1"
++new_sqlite_classes = ["Room"]
+diff --git a/src/main/index.js b/src/main/index.js
+index a79ab80..4ebf2f2 100644
+--- a/src/main/index.js
++++ b/src/main/index.js
+@@ -8,6 +8,7 @@ import fs from 'fs';
+ import path from 'path';
+ import os from 'os';
+ import electronSquirrelStartup from 'electron-squirrel-startup';
++import { createRemoteBridge } from './remote.js';
+ 
+ if (electronSquirrelStartup) {
+   app.quit();
+@@ -203,6 +204,18 @@ const schema = {
+     type: 'string',
+     default: path.join(app.getPath('pictures'), 'drawpen'),
+   },
++  remote_enabled: {
++    type: 'boolean',
++    default: false
++  },
++  remote_relay_url: {
++    type: 'string',
++    default: ''
++  },
++  remote_room_id: {
++    type: 'string',
++    default: ''
++  },
+ };
+ 
+ // rawLog('[STORE PATH]:', app.getPath('userData') + '/config.json');
+@@ -235,10 +248,13 @@ let mainWindow
+ let extendedToolbarWindow
+ let aboutWindow
+ let settingsWindow
++let remoteWindow
++let remoteBridge
+ 
+ let isQuitting = false
+ let startAsHidden = false
+ let drawingMode = false
++let remoteOverlay = false // Overlay shown click-through for iPad drawing while in pointer mode
+ 
+ let extendedToolbarPositionStoreTimeout = null
+ 
+@@ -319,6 +335,15 @@ function updateContextMenu() {
+       click: resetScreen
+     },
+     { type: 'separator' },
++    {
++      label: 'iPad Remote...',
++      click: showRemoteWindow
++    },
++    ...(remoteOverlay ? [{
++      label: 'Hide iPad Overlay',
++      click: hideRemoteOverlay
++    }] : []),
++    { type: 'separator' },
+     {
+       label: 'Reset to original',
+       click: resetApp
+@@ -668,6 +693,8 @@ app.whenReady().then(() => {
+ 
+   registerGlobalShortcuts()
+ 
++  createRemote()
++
+   updateApp()
+   setApplicationName()
+ 
+@@ -719,6 +746,9 @@ function hideDock() {
+ function updateApp() {
+   if (isLinux) return
+ 
++  // Fork: upstream release builds would replace this one and drop the iPad remote
++  return
++
+   updateElectronApp()
+ }
+ 
+@@ -1195,6 +1225,8 @@ function enableDrawMode() {
+ 
+   flushExtendedToolbarPosition()
+ 
++  mainWindow.setIgnoreMouseEvents(false)
++
+   showMainWindow()
+   hideWindow(extendedToolbarWindow)
+ 
+@@ -1205,13 +1237,20 @@ function enableDrawMode() {
+ function enablePointerMode() {
+   rawLog('Enable pointer mode...')
+ 
+-  resetScreenOnHide()
+-
+   showExtendedToolbarWindow()
+-  hideWindow(mainWindow)
++
++  if (remoteOverlay) {
++    // Keep drawings visible for the iPad, but let clicks through to the apps below
++    mainWindow.setIgnoreMouseEvents(true)
++    mainWindow.blur()
++  } else {
++    resetScreenOnHide()
++    hideWindow(mainWindow)
++  }
+ 
+   drawingMode = false
+   updateContextMenu()
++  sendRemoteOverlayState()
+ 
+   releaseFocusBack()
+ }
+@@ -1225,7 +1264,9 @@ function hideApp() {
+   hideWindow(extendedToolbarWindow)
+ 
+   drawingMode = false
++  remoteOverlay = false
+   updateContextMenu()
++  sendRemoteOverlayState()
+ 
+   releaseFocusBack()
+ }
+@@ -1742,6 +1783,163 @@ function launchTracker() {
+   } catch (_) {}
+ }
+ 
++// - iPad Remote
++function createRemote() {
++  remoteBridge = createRemoteBridge({
++    store,
++    log: rawLog,
++    getDrawingDisplay: getRemoteDisplay,
++    getHelloInfo: () => ({
++      colors: ['color_1', 'color_2', 'color_3', 'color_4', 'color_5', 'color_6'].map(id => store.get('tool_bar_color_palette')[id]),
++      overlay: mainWindow.isVisible(),
++    }),
++    onInput: handleRemoteInput,
++    onCommand: handleRemoteCommand,
++    onStateChange: sendRemoteStateToWindow,
++  })
++
++  if (store.get('remote_enabled')) {
++    remoteBridge.enable()
++  }
++}
++
++function getRemoteDisplay() {
++  if (mainWindow.isVisible()) {
++    return screen.getDisplayMatching(mainWindow.getBounds())
++  }
++
++  return getLockedMonitor() || getActiveMonitor() || getUnderToolbarMonitor() || getUnderCursorMonitor()
++}
++
++function handleRemoteInput(message) {
++  if (message.t === 'down' && !mainWindow.isVisible()) {
++    showRemoteOverlay()
++  }
++
++  mainWindow.webContents.send('remote_input', message)
++}
++
++function handleRemoteCommand(message) {
++  switch (message.t) {
++    case 'clear':
++      sendResetScreen()
++      break
++    case 'whiteboard':
++      toggleWhiteboard()
++      break
++    case 'overlay':
++      message.visible ? showRemoteOverlay() : hideRemoteOverlay()
++      break
++  }
++}
++
++// Show drawings without taking mouse or keyboard from the presented app
++function showRemoteOverlay() {
++  rawLog('Show iPad overlay...')
++
++  remoteOverlay = true
++
++  if (!drawingMode) {
++    if (!mainWindow.isVisible()) {
++      updateMainWindowPosition(getRemoteDisplay())
++    }
++
++    mainWindow.setIgnoreMouseEvents(true)
++    showWindow(mainWindow, { inactive: true })
++  }
++
++  updateContextMenu()
++  sendRemoteOverlayState()
++}
++
++function hideRemoteOverlay() {
++  rawLog('Hide iPad overlay...')
++
++  remoteOverlay = false
++
++  if (!drawingMode) {
++    resetScreenOnHide()
++    hideWindow(mainWindow)
++  }
++
++  updateContextMenu()
++  sendRemoteOverlayState()
++}
++
++function sendRemoteOverlayState() {
++  if (!remoteBridge) return
++
++  remoteBridge.sendOverlayState(mainWindow.isVisible())
++}
++
++async function sendRemoteStateToWindow() {
++  if (!remoteWindow) return
++
++  remoteWindow.webContents.send('remote_state', await remoteBridge.getState())
++}
++
++function showRemoteWindow() {
++  if (remoteWindow) {
++    remoteWindow.focus()
++  } else {
++    createRemoteWindow()
++  }
++
++  if (drawingMode) {
++    enablePointerMode()
++  }
++}
++
++function createRemoteWindow() {
++  remoteWindow = new BrowserWindow({
++    show: false,
++    width: 360,
++    height: 560,
++    useContentSize: true,
++    resizable: false,
++    minimizable: false,
++    maximizable: false,
++    autoHideMenuBar: true,
++    title: 'iPad Remote',
++    webPreferences: {
++      devTools: isDevelopment,
++      nodeIntegration: false,
++      preload: REMOTE_WINDOW_PRELOAD_WEBPACK_ENTRY,
++    }
++  })
++  remoteWindow.center()
++
++  remoteWindow.loadURL(REMOTE_WINDOW_WEBPACK_ENTRY)
++
++  remoteWindow.on('closed', () => {
++    remoteWindow = null
++  })
++
++  remoteWindow.webContents.on('did-finish-load', () => {
++    remoteWindow.show()
++  })
++
++  remoteWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
++}
++
++ipcMain.handle('remote_get_state', () => {
++  return remoteBridge.getState()
++})
++
++ipcMain.handle('remote_set_relay_url', (_event, value) => {
++  store.set('remote_relay_url', String(value || '').trim())
++  remoteBridge.reconnect()
++  sendRemoteStateToWindow()
++})
++
++ipcMain.handle('remote_set_enabled', (_event, value) => {
++  value ? remoteBridge.enable() : remoteBridge.disable()
++})
++
++ipcMain.handle('remote_new_room', () => {
++  remoteBridge.newRoom()
++})
++
+ function rawLog(message, ...args) {
+   if (!isLoggingEnabled) { return }
+ 
+diff --git a/src/main/remote.js b/src/main/remote.js
+new file mode 100644
+index 0000000..3e4ef9a
+--- /dev/null
++++ b/src/main/remote.js
+@@ -0,0 +1,338 @@
++// iPad Remote: connects to a relay (see remote/relay) so an iPad can draw on the overlay.
++// The iPad sends normalized pointer input; we send back periodic JPEG screenshots of the drawing display.
++
++import { desktopCapturer } from 'electron';
++import { randomBytes, createHash } from 'crypto';
++import QRCode from 'qrcode';
++
++const FRAME_INTERVAL_MS = 1000;
++const FRAME_AFTER_INPUT_MS = 200;
++const FRAME_MAX_WIDTH = 1600;
++const FRAME_MAX_BYTES = 900 * 1024; // Relay message limit is 1 MiB
++const PING_INTERVAL_MS = 20000;
++const RECONNECT_MAX_MS = 30000;
++
++const INPUT_MESSAGES = ['down', 'move', 'up', 'tool', 'color', 'width', 'undo', 'redo'];
++const COMMAND_MESSAGES = ['clear', 'whiteboard', 'overlay', 'frame'];
++
++export function createRemoteBridge({ store, log, getDrawingDisplay, getHelloInfo, onInput, onCommand, onStateChange }) {
++  let ws = null;
++  let wanted = false;
++  let status = 'disconnected'; // disconnected | no_relay | connecting | waiting | paired
++  let padConnected = false;
++  let reconnectTimer = null;
++  let reconnectDelay = 1000;
++  let pingTimer = null;
++  let frameTimer = null;
++  let frameSoonTimer = null;
++  let capturing = false;
++  let lastUpSeq = 0;
++  let lastSent = { hash: null, seq: -1 };
++
++  function roomId() {
++    let id = store.get('remote_room_id');
++
++    if (!/^[a-f0-9]{32}$/.test(id || '')) {
++      id = randomBytes(16).toString('hex');
++      store.set('remote_room_id', id);
++    }
++
++    return id;
++  }
++
++  function relayUrl() {
++    const value = (store.get('remote_relay_url') || '').trim().replace(/\/+$/, '');
++
++    try {
++      const url = new URL(value);
++      return ['https:', 'http:'].includes(url.protocol) ? url.origin : null;
++    } catch (_) {
++      return null;
++    }
++  }
++
++  function padUrl() {
++    const base = relayUrl();
++
++    return base ? `${base}/#room=${roomId()}` : null;
++  }
++
++  function wsUrl() {
++    const url = new URL(relayUrl());
++    url.protocol = url.protocol === 'http:' ? 'ws:' : 'wss:';
++    url.pathname = '/ws';
++    url.search = `?room=${roomId()}&role=host`;
++
++    return url.toString();
++  }
++
++  function setStatus(newStatus) {
++    status = newStatus;
++    onStateChange();
++  }
++
++  function isOpen() {
++    return ws && ws.readyState === WebSocket.OPEN;
++  }
++
++  function sendJson(message) {
++    if (isOpen()) ws.send(JSON.stringify(message));
++  }
++
++  function open() {
++    clearTimeout(reconnectTimer);
++
++    if (!wanted) return;
++
++    if (!relayUrl()) {
++      setStatus('no_relay');
++      return;
++    }
++
++    setStatus('connecting');
++
++    let socket;
++    try {
++      socket = new WebSocket(wsUrl());
++    } catch (error) {
++      log('Remote: connect failed', error.message);
++      scheduleReconnect();
++      return;
++    }
++
++    socket.binaryType = 'arraybuffer';
++    ws = socket;
++
++    socket.onopen = () => {
++      if (ws !== socket) return;
++
++      reconnectDelay = 1000;
++      clearInterval(pingTimer);
++      pingTimer = setInterval(() => isOpen() && ws.send('ping'), PING_INTERVAL_MS);
++      setStatus(padConnected ? 'paired' : 'waiting');
++    };
++
++    socket.onmessage = (event) => {
++      if (ws !== socket || typeof event.data !== 'string' || event.data === 'pong') return;
++
++      let message;
++      try {
++        message = JSON.parse(event.data);
++      } catch (_) {
++        return;
++      }
++
++      handleMessage(message);
++    };
++
++    socket.onclose = () => {
++      if (ws !== socket) return;
++
++      ws = null;
++      clearInterval(pingTimer);
++      setPadConnected(false);
++      scheduleReconnect();
++    };
++
++    socket.onerror = () => {}; // onclose follows
++  }
++
++  function scheduleReconnect() {
++    if (!wanted) {
++      setStatus('disconnected');
++      return;
++    }
++
++    setStatus('connecting');
++    clearTimeout(reconnectTimer);
++    reconnectTimer = setTimeout(open, reconnectDelay);
++    reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
++  }
++
++  function close() {
++    clearTimeout(reconnectTimer);
++    clearInterval(pingTimer);
++    setPadConnected(false);
++
++    if (ws) {
++      const socket = ws;
++      ws = null;
++      try { socket.close(1000, 'bye'); } catch (_) {}
++    }
++  }
++
++  function setPadConnected(value) {
++    padConnected = value;
++
++    if (padConnected) {
++      lastSent = { hash: null, seq: -1 };
++      sendHello();
++      clearInterval(frameTimer);
++      frameTimer = setInterval(() => captureAndSend(false), FRAME_INTERVAL_MS);
++      captureAndSend(true);
++    } else {
++      clearInterval(frameTimer);
++      clearTimeout(frameSoonTimer);
++      frameTimer = null;
++    }
++
++    if (isOpen()) setStatus(padConnected ? 'paired' : 'waiting');
++  }
++
++  function handleMessage(message) {
++    if (message.t === 'peer') {
++      if (message.role === 'pad') setPadConnected(Boolean(message.connected));
++      return;
++    }
++
++    if (message.t === 'hi') {
++      sendHello();
++      captureAndSend(true);
++      return;
++    }
++
++    if (INPUT_MESSAGES.includes(message.t)) {
++      if (message.t === 'up' && Number.isInteger(message.seq)) {
++        lastUpSeq = message.seq;
++      }
++
++      onInput(message);
++
++      if (['up', 'undo', 'redo'].includes(message.t)) frameSoon();
++      return;
++    }
++
++    if (COMMAND_MESSAGES.includes(message.t)) {
++      if (message.t === 'frame') {
++        captureAndSend(true);
++        return;
++      }
++
++      onCommand(message);
++      frameSoon();
++    }
++  }
++
++  function sendHello() {
++    const display = getDrawingDisplay();
++
++    sendJson({
++      t: 'hello',
++      w: display.workArea.width,
++      h: display.workArea.height,
++      ...getHelloInfo(),
++    });
++  }
++
++  function sendOverlayState(visible) {
++    sendJson({ t: 'overlay_state', visible });
++  }
++
++  function frameSoon() {
++    clearTimeout(frameSoonTimer);
++    frameSoonTimer = setTimeout(() => captureAndSend(true), FRAME_AFTER_INPUT_MS);
++  }
++
++  async function captureAndSend(force) {
++    if (capturing || !padConnected || !isOpen()) return;
++
++    capturing = true;
++    const seq = lastUpSeq;
++
++    try {
++      const display = getDrawingDisplay();
++      const scaleFactor = display.scaleFactor || 1;
++
++      const sources = await desktopCapturer.getSources({
++        types: ['screen'],
++        thumbnailSize: {
++          width: Math.round(display.size.width * scaleFactor),
++          height: Math.round(display.size.height * scaleFactor),
++        },
++      });
++
++      const source =
++        sources.find(s => String(s.display_id ?? '') === String(display.id)) ||
++        sources[0];
++
++      if (!source || source.thumbnail.isEmpty()) return;
++
++      // Crop to the work area: that is what the overlay window covers
++      let image = source.thumbnail;
++      const { width: imageWidth } = image.getSize();
++      const scale = imageWidth / display.bounds.width;
++      const { workArea, bounds } = display;
++
++      image = image.crop({
++        x: Math.round((workArea.x - bounds.x) * scale),
++        y: Math.round((workArea.y - bounds.y) * scale),
++        width: Math.round(workArea.width * scale),
++        height: Math.round(workArea.height * scale),
++      });
++
++      if (image.getSize().width > FRAME_MAX_WIDTH) {
++        image = image.resize({ width: FRAME_MAX_WIDTH, quality: 'good' });
++      }
++
++      let jpeg = image.toJPEG(65);
++      if (jpeg.length > FRAME_MAX_BYTES) jpeg = image.toJPEG(40);
++      if (jpeg.length > FRAME_MAX_BYTES) return;
++
++      const hash = createHash('md5').update(jpeg).digest('hex');
++      if (!force && hash === lastSent.hash && seq === lastSent.seq) return;
++
++      if (!isOpen()) return;
++
++      sendJson({ t: 'frame', seq, w: workArea.width, h: workArea.height });
++      ws.send(jpeg);
++      lastSent = { hash, seq };
++    } catch (error) {
++      log('Remote: capture failed', error.message);
++    } finally {
++      capturing = false;
++    }
++  }
++
++  return {
++    enable() {
++      wanted = true;
++      store.set('remote_enabled', true);
++      open();
++    },
++
++    disable() {
++      wanted = false;
++      store.set('remote_enabled', false);
++      close();
++      setStatus('disconnected');
++    },
++
++    reconnect() {
++      if (!wanted) return;
++
++      close();
++      open();
++    },
++
++    newRoom() {
++      store.set('remote_room_id', randomBytes(16).toString('hex'));
++      this.reconnect();
++      onStateChange();
++    },
++
++    sendOverlayState,
++
++    async getState() {
++      const url = padUrl();
++
++      return {
++        enabled: wanted,
++        status,
++        padConnected,
++        relayUrl: store.get('remote_relay_url') || '',
++        padUrl: url,
++        qrDataUrl: url ? await QRCode.toDataURL(url, { margin: 1, width: 280 }) : null,
++      };
++    },
++  };
++}
+diff --git a/src/renderer/app_page/components/Application.js b/src/renderer/app_page/components/Application.js
+index f8a65da..bb95e10 100644
+--- a/src/renderer/app_page/components/Application.js
++++ b/src/renderer/app_page/components/Application.js
+@@ -1,6 +1,7 @@
+ import './Application.scss';
+ 
+ import React, { useCallback, useState, useEffect, useRef } from 'react';
++import { flushSync } from 'react-dom';
+ import { throttle, debounce } from 'lodash';
+ import DrawDesk from './components/DrawDesk.js';
+ import ToolBar from './components/ToolBar.js';
+@@ -56,6 +57,7 @@ import {
+   pastCooldownMs,
+   escDoubleTapMs,
+   updateStoreDelay,
++  remoteToolList,
+ } from './constants.js';
+ 
+ const Icons = {
+@@ -1668,6 +1670,73 @@ const Application = (settings) => {
+     setRedoStackFigures([]);
+   }
+ 
++  // iPad Remote: input arrives normalized (0..1) over IPC.
++  // flushSync so each event sees the state left by the previous one, like real pointer events.
++  const remoteHandlersRef = useRef(null);
++  remoteHandlersRef.current = { handleMouseDown, handleMouseMove, handleMouseUp, handleChangeTool, handleChangeColor, handleChangeWidth, handleKeyDown };
++
++  useEffect(() => {
++    const handlers = () => remoteHandlersRef.current;
++    const toPoint = (point) => {
++      if (!Array.isArray(point)) return null;
++
++      const [x, y] = point.map(Number);
++      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
++
++      return {
++        x: Math.min(Math.max(x, 0), 1) * window.innerWidth,
++        y: Math.min(Math.max(y, 0), 1) * window.innerHeight,
++      };
++    };
++    const withPoint = (point, callback) => {
++      const coordinates = toPoint(point);
++      if (coordinates) flushSync(() => callback(coordinates));
++    };
++
++    window.electronAPI.onRemoteInput((_event, message) => {
++      switch (message.t) {
++        case 'down':
++          withPoint(message.p, (coordinates) => handlers().handleMouseDown(coordinates));
++          break;
++        case 'move':
++          (Array.isArray(message.pts) ? message.pts : []).forEach((point) => {
++            withPoint(point, (coordinates) => handlers().handleMouseMove(coordinates));
++          });
++          break;
++        case 'up':
++          withPoint(message.p, (coordinates) => handlers().handleMouseUp(coordinates));
++          break;
++        case 'tool':
++          if (remoteToolList.includes(message.tool)) {
++            flushSync(() => handlers().handleChangeTool(message.tool));
++          }
++          break;
++        case 'color':
++          if (Number.isInteger(message.index) && message.index >= 0 && message.index < colorList.length) {
++            flushSync(() => handlers().handleChangeColor(message.index));
++          }
++          break;
++        case 'width':
++          if (Number.isInteger(message.index) && message.index >= 0 && message.index < widthList.length) {
++            flushSync(() => handlers().handleChangeWidth(message.index));
++          }
++          break;
++        case 'undo':
++        case 'redo':
++          flushSync(() => handlers().handleKeyDown({
++            key: 'z',
++            code: 'KeyZ',
++            ctrlKey: true,
++            metaKey: false,
++            shiftKey: message.t === 'redo',
++            repeat: false,
++            preventDefault: () => {},
++          }));
++          break;
++      }
++    });
++  }, []);
++
+   const manipulation = (isDrawing || isActiveFigureMoving()) ? "manipulation_mode" : "";
+   const canvasCursorType = cuteCursorMode === 'dot' && cursorType === 'crosshair' ? 'default' : cursorType;
+   const isCuteCursorVisible =
+diff --git a/src/renderer/app_page/components/constants.js b/src/renderer/app_page/components/constants.js
+index 3ca8bb0..5763362 100644
+--- a/src/renderer/app_page/components/constants.js
++++ b/src/renderer/app_page/components/constants.js
+@@ -34,6 +34,7 @@ export const brushList = ['pen', 'fadepen'];
+ export const shapeList = ['arrow', 'flat_arrow', 'rectangle', 'diamond', 'oval', 'line'];
+ export const penVariantList = ['pen', 'fadepen'];
+ export const arrowVariantList = ['arrow', 'flat_arrow'];
++export const remoteToolList = ['pen', 'fadepen', 'highlighter', 'laser', 'arrow', 'flat_arrow', 'line', 'rectangle', 'diamond', 'oval', 'eraser'];
+ 
+ export const dotRadius = 5;
+ export const dotStrokeWidth = 1;
+diff --git a/src/renderer/app_page/preload.js b/src/renderer/app_page/preload.js
+index bd1499e..cca1a37 100644
+--- a/src/renderer/app_page/preload.js
++++ b/src/renderer/app_page/preload.js
+@@ -20,4 +20,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
+   onRefreshSettings: (callback) => ipcRenderer.on('refresh_settings', callback),
+   onUpdateToolbarPosition: (callback) => ipcRenderer.on('update_toolbar_position', callback),
+   onShowNotification: (callback) => ipcRenderer.on('show_notification', callback),
++  onRemoteInput: (callback) => ipcRenderer.on('remote_input', callback),
+ });
+diff --git a/src/renderer/remote_page/index.html b/src/renderer/remote_page/index.html
+new file mode 100644
+index 0000000..90aff89
+--- /dev/null
++++ b/src/renderer/remote_page/index.html
+@@ -0,0 +1,48 @@
++<!DOCTYPE html>
++<html>
++  <head>
++    <meta charset="UTF-8">
++    <title>iPad Remote</title>
++    <style>
++      :root { color-scheme: light dark; }
++      body { font: 13px system-ui, sans-serif; margin: 0; padding: 16px; background: Canvas; color: CanvasText; }
++      h1 { font-size: 16px; margin: 0 0 12px; }
++      label { display: block; margin-bottom: 4px; opacity: .8; }
++      .row { display: flex; gap: 6px; margin-bottom: 12px; }
++      input { flex: 1; padding: 6px; font: inherit; }
++      button { padding: 6px 10px; font: inherit; cursor: pointer; }
++      #status { margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
++      #dot { width: 10px; height: 10px; border-radius: 50%; background: gray; }
++      #dot.waiting { background: #E0A552; }
++      #dot.paired { background: #52E06C; }
++      #dot.error { background: #E05252; }
++      #qr { display: block; margin: 0 auto 8px; width: 280px; height: 280px; background: white; border-radius: 6px; }
++      #url { word-break: break-all; font-size: 11px; opacity: .7; user-select: all; text-align: center; margin-bottom: 12px; }
++      .hint { font-size: 11px; opacity: .7; }
++      [hidden] { display: none !important; }
++    </style>
++  </head>
++
++  <body>
++    <h1>iPad Remote</h1>
++
++    <label for="relay">Relay URL</label>
++    <div class="row">
++      <input id="relay" type="url" placeholder="https://drawpen-relay.example.workers.dev" spellcheck="false">
++      <button id="save">Save</button>
++    </div>
++
++    <div id="status"><span id="dot"></span><span id="status-text">Disconnected</span></div>
++
++    <div class="row">
++      <button id="toggle">Connect</button>
++      <button id="new-room" title="Invalidates the old QR code">New pairing code</button>
++    </div>
++
++    <div id="pairing" hidden>
++      <img id="qr" alt="Pairing QR code">
++      <div id="url"></div>
++      <p class="hint">Scan with the iPad camera. Anyone with this link can draw on and see this screen; use "New pairing code" to revoke it.</p>
++    </div>
++  </body>
++</html>
+diff --git a/src/renderer/remote_page/index.js b/src/renderer/remote_page/index.js
+new file mode 100644
+index 0000000..ef92ce5
+--- /dev/null
++++ b/src/renderer/remote_page/index.js
+@@ -0,0 +1,63 @@
++console.log('[DRAWPEN]: Remote Page loading...');
++
++const STATUS_TEXT = {
++  disconnected: 'Disconnected',
++  no_relay: 'Set a valid relay URL',
++  connecting: 'Connecting to relay...',
++  waiting: 'Waiting for iPad',
++  paired: 'iPad connected',
++};
++
++const STATUS_CLASS = {
++  no_relay: 'error',
++  waiting: 'waiting',
++  paired: 'paired',
++};
++
++const $ = (id) => document.getElementById(id);
++
++let enabled = false;
++
++function render(state) {
++  enabled = state.enabled;
++
++  if (document.activeElement !== $('relay')) {
++    $('relay').value = state.relayUrl;
++  }
++
++  $('dot').className = STATUS_CLASS[state.status] || '';
++  $('status-text').innerText = STATUS_TEXT[state.status] || state.status;
++  $('toggle').innerText = enabled ? 'Disconnect' : 'Connect';
++
++  $('pairing').hidden = !(enabled && state.padUrl);
++  if (state.qrDataUrl) $('qr').src = state.qrDataUrl;
++  $('url').innerText = state.padUrl || '';
++}
++
++async function refresh() {
++  render(await window.electronAPI.getState());
++}
++
++$('save').addEventListener('click', async () => {
++  await window.electronAPI.setRelayUrl($('relay').value);
++  $('relay').blur();
++  refresh();
++});
++
++$('relay').addEventListener('keydown', (event) => {
++  if (event.key === 'Enter') $('save').click();
++});
++
++$('toggle').addEventListener('click', async () => {
++  await window.electronAPI.setEnabled(!enabled);
++  refresh();
++});
++
++$('new-room').addEventListener('click', async () => {
++  await window.electronAPI.newRoom();
++  refresh();
++});
++
++window.electronAPI.onState((_event, state) => render(state));
++
++refresh();
+diff --git a/src/renderer/remote_page/preload.js b/src/renderer/remote_page/preload.js
+new file mode 100644
+index 0000000..1f569f4
+--- /dev/null
++++ b/src/renderer/remote_page/preload.js
+@@ -0,0 +1,14 @@
++console.log('[DRAWPEN]: Remote Page preloading...');
++
++const { contextBridge, ipcRenderer } = require('electron');
++
++contextBridge.exposeInMainWorld('electronAPI', {
++  // Renderer -> Main
++  getState: () => ipcRenderer.invoke('remote_get_state'),
++  setRelayUrl: (value) => ipcRenderer.invoke('remote_set_relay_url', value),
++  setEnabled: (value) => ipcRenderer.invoke('remote_set_enabled', value),
++  newRoom: () => ipcRenderer.invoke('remote_new_room'),
++
++  // Main -> Renderer
++  onState: (callback) => ipcRenderer.on('remote_state', callback),
++});
+diff --git a/tools/forge/forge.config.js b/tools/forge/forge.config.js
+index 8a9c425..2c26f74 100644
+--- a/tools/forge/forge.config.js
++++ b/tools/forge/forge.config.js
+@@ -136,6 +136,14 @@ module.exports = {
+                 js: path.join(rootDir, 'src/renderer/about_page/preload.js'),
+               },
+             },
++            {
++              name: 'remote_window',
++              html: path.join(rootDir, 'src/renderer/remote_page/index.html'),
++              js: path.join(rootDir, 'src/renderer/remote_page/index.js'),
++              preload: {
++                js: path.join(rootDir, 'src/renderer/remote_page/preload.js'),
++              },
++            },
+             {
+               name: 'settings_window',
+               html: path.join(rootDir, 'src/renderer/settings_page/index.html'),
+-- 
+2.43.0
+
